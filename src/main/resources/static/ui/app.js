@@ -416,14 +416,39 @@ async function selectDataset(id) {
                      : spdx.startsWith('Public') ? 'license-pd'
                      : spdx.startsWith('ODbL') ? 'license-odbl'
                      : '';
+  const shareAlike = manifest.license?.shareAlike === true;
+  const attribReq = manifest.license?.attributionRequired === true;
   $('#ds-badges').innerHTML = `
     <span class="ds-badge ${licenseClass}">${esc(spdx || 'no-license')}</span>
     <span class="ds-badge kind">${esc(summary.kind || 'unknown')}</span>
+    ${shareAlike ? '<span class="ds-badge license-odbl" title="Any join result inherits this share-alike obligation as a database">⚠ share-alike</span>' : ''}
+    ${attribReq  ? '<span class="ds-badge license-cc-by" title="Redistributions must credit the source">© attribution required</span>' : ''}
     <span class="meta">
       · table <code>${esc(tableName)}</code>
       · PK <code>${esc(manifest.record?.primaryKey || '—')}</code>
     </span>
   `;
+
+  // Prominent share-alike callout below the header — surfaces the
+  // obligation the LicenseAlgebra would raise if this dataset joined
+  // anything else. See docs/LICENSE_ALGEBRA.md.
+  const oldNotice = document.getElementById('ds-license-notice');
+  if (oldNotice) oldNotice.remove();
+  if (shareAlike) {
+    const notice = document.createElement('div');
+    notice.id = 'ds-license-notice';
+    notice.style.cssText =
+        'margin-top: 0.75rem; padding: 0.6rem 0.75rem; background: #fef3f2;' +
+        'border-left: 3px solid #C0392B; border-radius: 0.25rem; font-size: 0.85rem;';
+    notice.innerHTML =
+        `<strong>Share-alike source (${esc(spdx)})</strong> — any joined ` +
+        `result inherits share-alike as a database. If you plan to ` +
+        `redistribute a result that touches ` +
+        `<code>${esc(tableName)}</code>, you probably have to release it ` +
+        `under the same terms. Not legal advice; see ` +
+        `<a href="https://opendatacommons.org/licenses/odbl/" target="_blank">ODbL text</a>.`;
+    $('#ds-selected').querySelector('header').after(notice);
+  }
 
   // Schema table — highlight fields with a role (that's the whole story
   // of semantic joins).
