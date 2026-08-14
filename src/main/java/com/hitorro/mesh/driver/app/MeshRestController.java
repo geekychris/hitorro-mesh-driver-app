@@ -9,6 +9,7 @@ import com.hitorro.mesh.driver.DistributedTable;
 import com.hitorro.mesh.driver.DistributedTableRegistry;
 import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.mesh.driver.QueryDispatcher;
+import com.hitorro.mesh.driver.QueryPlanner;
 import com.hitorro.mesh.orion.ClusterManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -144,6 +145,77 @@ public class MeshRestController {
         h.close();
         log.info("query cancelled by client: {}", queryId);
         return java.util.Map.of("queryId", queryId, "cancelled", true);
+    }
+
+    /**
+     * Phase 7h — return the planned execution shape for a SQL WITHOUT
+     * running it. Shows the plan variant (SimplePlan, TwoStagePlan,
+     * ShuffleJoinPlan, ShuffleJoinAggregatePlan, StreamingWindowedPlan),
+     * the partial/combine SQL where applicable, and which agents each
+     * partition would dispatch to.
+     *
+     * <p>Useful for debugging: verify that a query hits the shuffle-hash
+     * path rather than the broadcast-only guard; check that WHERE pushdown
+     * is applied to per-side scans; confirm that a windowed streaming
+     * query routes to StreamingWindowedPlan and not the batch two-stage.</p>
+     */
+    @GetMapping("/queries/explain")
+    public Map<String, Object> explain(@RequestParam("sql") String sql) {
+        DistributedTableRegistry tables = driver.tables();
+        Set<String> distributedNames = new HashSet<>();
+        for (DistributedTable t : tables.all()) distributedNames.add(t.name());
+        QueryPlanner.Plan plan = QueryPlanner.plan(sql,
+                tables.broadcastNames(), distributedNames, tables.streamingTableNames());
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sql", sql);
+        out.put("planType", plan.getClass().getSimpleName());
+        out.put("tableName", plan.tableName());
+
+        // Plan-specific fields.
+        if (plan instanceof QueryPlanner.TwoStagePlan tsp) {
+            out.put("partialSql", tsp.partialSql());
+            out.put("combineSql", tsp.combineSql());
+            out.put("groupColumns", tsp.groupColumns());
+        } else if (plan instanceof QueryPlanner.ShuffleJoinPlan sjp) {
+            out.put("leftTable", sjp.leftTable());
+            out.put("rightTable", sjp.rightTable());
+            out.put("leftKey", sjp.leftKey());
+            out.put("rightKey", sjp.rightKey());
+            out.put("joinKind", sjp.joinKind().name());
+            out.put("originalSql", sjp.originalSql());
+            out.put("leftPushdown", QueryPlanner.computeSidePushdown(sjp.originalSql(), sjp.leftTable()).orElse(null));
+            out.put("rightPushdown", QueryPlanner.computeSidePushdown(sjp.originalSql(), sjp.rightTable()).orElse(null));
+        } else if (plan instanceof QueryPlanner.ShuffleJoinAggregatePlan sjap) {
+            out.put("leftTable", sjap.leftTable());
+            out.put("rightTable", sjap.rightTable());
+            out.put("joinKind", sjap.joinKind().name());
+            out.put("partialSql", sjap.partialSql());
+            out.put("combineSql", sjap.combineSql());
+            out.put("groupColumns", sjap.groupColumns());
+        } else if (plan instanceof QueryPlanner.StreamingWindowedPlan swp) {
+            out.put("originalSql", swp.originalSql());
+            out.put("partialSql", swp.partialSql());
+            out.put("combineSql", swp.combineSql());
+            out.put("groupColumns", swp.groupColumns());
+        }
+
+        // Partition → eligible agents (which agents would actually run scan tasks).
+        DistributedTable table = tables.get(plan.tableName());
+        if (table != null) {
+            List<Map<String, Object>> parts = new java.util.ArrayList<>();
+            for (var p : table.partitions()) {
+                Map<String, Object> pInfo = new LinkedHashMap<>();
+                pInfo.put("key", p.key());
+                pInfo.put("requiredCapabilities", p.requiredCapabilities());
+                pInfo.put("eligibleAgents",
+                        driver.agents().agentsWith(new java.util.ArrayList<>(p.requiredCapabilities()))
+                                .stream().map(AgentDescriptor::agentId).toList());
+                parts.add(pInfo);
+            }
+            out.put("partitions", parts);
+        }
+        return out;
     }
 
     /** Phase 7d — list currently in-flight queries (for operator visibility). */
