@@ -6,6 +6,7 @@
   <title>Hitorro Mesh — Admin</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -17,6 +18,7 @@
     <li><span id="health-dot" class="dot"></span> <span id="health-text">checking…</span></li>
     <li><span id="agent-count" class="badge">? agents</span></li>
     <li><span id="tables-count" class="badge">? tables</span></li>
+    <li><span id="active-count" class="badge">? active</span></li>
   </ul>
 </nav>
 
@@ -33,10 +35,45 @@
 
   <!-- ================== CLUSTER ================== -->
   <section id="cluster" class="tab-panel active">
+
+    <!-- Sparkline dashboard row -->
+    <article>
+      <header>Live activity <small class="meta">(5s intervals · last 12 samples)</small></header>
+      <div class="sparkline-grid">
+        <div class="sparkline-card">
+          <span class="sparkline-label">Query rate (per interval)</span>
+          <canvas id="spark-queries" width="240" height="60"></canvas>
+          <span class="sparkline-value" id="spark-queries-value">—</span>
+        </div>
+        <div class="sparkline-card">
+          <span class="sparkline-label">Median query latency (ms)</span>
+          <canvas id="spark-latency" width="240" height="60"></canvas>
+          <span class="sparkline-value" id="spark-latency-value">—</span>
+        </div>
+        <div class="sparkline-card">
+          <span class="sparkline-label">Live agents</span>
+          <canvas id="spark-agents" width="240" height="60"></canvas>
+          <span class="sparkline-value" id="spark-agents-value">—</span>
+        </div>
+        <div class="sparkline-card">
+          <span class="sparkline-label">Total rows returned</span>
+          <canvas id="spark-rows" width="240" height="60"></canvas>
+          <span class="sparkline-value" id="spark-rows-value">—</span>
+        </div>
+      </div>
+    </article>
+
     <div class="grid">
       <article>
-        <header>Health</header>
-        <pre id="health-json" class="scroll">…</pre>
+        <header>
+          <span>Cluster status</span>
+          <span id="cluster-platform-badge" class="badge">?</span>
+        </header>
+        <div id="cluster-friendly">…</div>
+        <details>
+          <summary><small>Raw JSON</small></summary>
+          <pre id="cluster-json" class="scroll">…</pre>
+        </details>
       </article>
       <article>
         <header>Live agents <span id="cluster-agent-count" class="badge">?</span></header>
@@ -45,62 +82,121 @@
     </div>
 
     <article>
-      <header>Registered tables <span id="table-count-inline" class="badge">?</span></header>
+      <header>
+        <span>Registered tables <span id="table-count-inline" class="badge">?</span></span>
+        <small class="meta">Click a table to see its type + sample rows</small>
+      </header>
       <div id="table-list">…</div>
     </article>
 
     <article>
-      <header>Cluster (declared vs live)</header>
-      <pre id="cluster-json" class="scroll">…</pre>
+      <header>Overall health</header>
+      <div id="health-friendly">…</div>
+      <details>
+        <summary><small>Raw JSON</small></summary>
+        <pre id="health-json" class="scroll">…</pre>
+      </details>
+    </article>
+
+    <!-- Table detail modal-ish -->
+    <article id="schema-panel" hidden>
+      <header>
+        <span>Table: <strong id="schema-name"></strong></span>
+        <button id="schema-close" class="secondary outline">Close</button>
+      </header>
+      <div class="grid">
+        <article>
+          <header>JVS type definition</header>
+          <div id="schema-fields">…</div>
+        </article>
+        <article>
+          <header>Sample rows <small class="meta">(SELECT * FROM x LIMIT 10)</small></header>
+          <div id="schema-sample">…</div>
+        </article>
+      </div>
     </article>
   </section>
 
   <!-- ================== PLAYGROUND ================== -->
   <section id="playground" class="tab-panel">
-    <article>
-      <header>SQL query</header>
-      <textarea id="pg-sql" rows="4" placeholder="SELECT lang, COUNT(*) FROM docs GROUP BY lang">SELECT lang, COUNT(*) AS n FROM docs GROUP BY lang</textarea>
-      <div class="row">
-        <label>Timeout (ms) <input type="number" id="pg-timeout" value="5000" min="1"></label>
-        <label>Retries <input type="number" id="pg-retries" value="0" min="0" max="5"></label>
-        <button id="pg-run">Run query</button>
-        <button id="pg-explain-btn" class="secondary">Explain</button>
-      </div>
-    </article>
+    <div class="grid pg-grid">
+      <!-- Snippet library -->
+      <article class="snippet-panel">
+        <header>Snippets <small class="meta">click to load</small></header>
+        <div id="snippet-list"></div>
+      </article>
 
-    <article id="pg-result" hidden>
-      <header>
-        <span>Result</span>
-        <span id="pg-meta" class="meta"></span>
-      </header>
-      <div class="tabs sub-tabs">
-        <button data-view="pg-table" class="active">Table</button>
-        <button data-view="pg-json">JSON</button>
-      </div>
-      <div id="pg-table" class="view active"></div>
-      <pre id="pg-json" class="view scroll"></pre>
-    </article>
+      <!-- Editor + result (span 3 cols) -->
+      <div class="pg-main">
+        <article>
+          <header>
+            <span>SQL query</span>
+            <span id="pg-editor-hint" class="meta"></span>
+          </header>
+          <textarea id="pg-sql" rows="5" placeholder="SELECT lang, COUNT(*) FROM docs GROUP BY lang">SELECT lang, COUNT(*) AS n FROM docs GROUP BY lang</textarea>
+          <div class="row">
+            <label>Timeout (ms) <input type="number" id="pg-timeout" value="5000" min="1"></label>
+            <label>Retries <input type="number" id="pg-retries" value="0" min="0" max="5"></label>
+            <button id="pg-run">▶ Run query</button>
+            <button id="pg-explain-btn" class="secondary">Explain plan</button>
+            <button id="pg-clear" class="secondary outline">Clear</button>
+          </div>
+        </article>
 
-    <article>
-      <header>Recent (this browser)</header>
-      <div id="pg-history">
-        <p><small>No queries yet.</small></p>
+        <article id="pg-result" hidden>
+          <header>
+            <span>Result</span>
+            <span id="pg-meta" class="meta"></span>
+          </header>
+          <div class="tabs sub-tabs">
+            <button data-view="pg-table" class="active">Table</button>
+            <button data-view="pg-chart">Chart</button>
+            <button data-view="pg-json">JSON</button>
+          </div>
+          <div id="pg-table" class="view active"></div>
+          <div id="pg-chart" class="view">
+            <div class="row" style="margin-bottom: 0.5rem;">
+              <label>Chart type
+                <select id="pg-chart-type" style="width: 8rem; margin: 0;">
+                  <option value="bar">Bar</option>
+                  <option value="line">Line</option>
+                  <option value="doughnut">Doughnut</option>
+                </select>
+              </label>
+              <label>X axis <select id="pg-chart-x" style="width: 8rem; margin: 0;"></select></label>
+              <label>Y axis <select id="pg-chart-y" style="width: 8rem; margin: 0;"></select></label>
+            </div>
+            <canvas id="pg-chart-canvas" height="120"></canvas>
+          </div>
+          <pre id="pg-json" class="view scroll"></pre>
+        </article>
+
+        <article>
+          <header>
+            <span>Recent (this browser)</span>
+            <button id="pg-history-clear" class="secondary outline" style="width:auto;margin:0;font-size:0.8rem;">Clear</button>
+          </header>
+          <div id="pg-history">
+            <p><small>No queries yet.</small></p>
+          </div>
+        </article>
       </div>
-    </article>
+    </div>
   </section>
 
   <!-- ================== STREAMING ================== -->
   <section id="stream" class="tab-panel">
     <article>
-      <header>Streaming query (SSE)</header>
+      <header>Streaming query (Server-Sent Events)</header>
       <textarea id="stream-sql" rows="4">SELECT id FROM docs WHERE lang = 'en'</textarea>
       <div class="row">
         <label>Timeout (ms) <input type="number" id="stream-timeout" value="60000" min="1000"></label>
-        <button id="stream-run">Start streaming</button>
-        <button id="stream-stop" class="contrast" disabled>Cancel</button>
+        <button id="stream-run">▶ Start streaming</button>
+        <button id="stream-stop" class="contrast" disabled>■ Cancel</button>
       </div>
       <p><small>Uses <code>GET /mesh/queries/stream</code>. Rows arrive
-        as SSE events. Cancel sends <code>DELETE /mesh/queries/{queryId}</code>.</small></p>
+        as SSE events. Cancel sends <code>DELETE /mesh/queries/{queryId}</code>.
+        Great for streaming windowed aggregates over Kafka / NATS sources.</small></p>
     </article>
 
     <article id="stream-panel" hidden>
@@ -111,6 +207,7 @@
       <div class="row">
         <span>Rows: <strong id="stream-row-count">0</strong></span>
         <span>Status: <strong id="stream-status">idle</strong></span>
+        <span>Rate: <strong id="stream-rate">0</strong> rows/s</span>
       </div>
       <div id="stream-rows" class="stream-table"></div>
     </article>
@@ -119,9 +216,9 @@
   <!-- ================== EXPLAIN ================== -->
   <section id="explain" class="tab-panel">
     <article>
-      <header>Plan explain</header>
+      <header>Plan explain — see what the mesh would do</header>
       <textarea id="ex-sql" rows="4">SELECT d.lang, COUNT(*) FROM docs d JOIN events e ON d.id = e.doc_id GROUP BY d.lang</textarea>
-      <button id="ex-run">Explain</button>
+      <button id="ex-run">▶ Explain</button>
     </article>
 
     <article id="ex-result" hidden>
@@ -131,9 +228,12 @@
       </header>
       <div class="grid">
         <article><header>Overview</header><div id="ex-overview"></div></article>
-        <article><header>Partitions</header><div id="ex-partitions"></div></article>
+        <article><header>Partitions &amp; agent assignment</header><div id="ex-partitions"></div></article>
       </div>
-      <article><header>Full plan JSON</header><pre id="ex-json" class="scroll"></pre></article>
+      <details>
+        <summary><small>Full plan JSON</small></summary>
+        <pre id="ex-json" class="scroll"></pre>
+      </details>
     </article>
   </section>
 
@@ -148,16 +248,17 @@
         <p><small>Loading…</small></p>
       </div>
     </article>
-    <p><small>Auto-refreshes every 3 seconds when this tab is active.</small></p>
+    <p><small>Auto-refreshes every 3 seconds while this tab is active.
+      Cancel a query with the × button per row.</small></p>
   </section>
 
   <!-- ================== METRICS ================== -->
   <section id="metrics" class="tab-panel">
     <article>
-      <header>Prometheus scrape</header>
-      <p>Metrics live at <code><a href="/actuator/prometheus" target="_blank">/actuator/prometheus</a></code>.
-      Wire this into your existing Prometheus + Grafana stack — a
-      pre-built dashboard is planned but not shipped yet.</p>
+      <header>Prometheus scrape <a href="/actuator/prometheus" target="_blank" style="font-size:0.85rem;">(raw)</a></header>
+      <p><small>Wire this into your existing Prometheus + Grafana stack for
+      historical dashboards. The Cluster tab has live sparklines for the
+      most useful meters.</small></p>
       <div class="grid">
         <article>
           <header>Meter families</header>
@@ -167,11 +268,11 @@
             <li><code>mesh_rows_returned_total</code></li>
             <li><code>mesh_agents_live</code>, <code>mesh_tables_registered</code></li>
             <li><code>mesh_backpressure_drops_total</code></li>
-            <li><code>mesh_agent_*_total{agent}</code> (per-agent)</li>
+            <li><code>mesh_agent_*_total{agent}</code> (per-agent, tagged)</li>
           </ul>
         </article>
         <article>
-          <header>Live snapshot</header>
+          <header>Live filtered snapshot (mesh_* meters only)</header>
           <pre id="metrics-snapshot" class="scroll">Loading…</pre>
         </article>
       </div>
@@ -182,7 +283,7 @@
 
 <footer class="container">
   <small>
-    <a href="https://github.com/geekychris/hitorro-mesh-core" target="_blank">Source</a> ·
+    <a href="https://github.com/geekychris/geekychris/hitorro-mesh-core" target="_blank">Source</a> ·
     <a href="https://github.com/geekychris/hitorro-mesh-core/blob/main/GETTING_STARTED.md" target="_blank">Getting Started</a> ·
     <a href="https://github.com/geekychris/hitorro-mesh-core/blob/main/docs/user-guide/mesh-user-guide.adoc" target="_blank">User Guide</a>
   </small>

@@ -1,10 +1,11 @@
-/* Hitorro Mesh UI — tiny overrides on top of Pico.css */
+/* Hitorro Mesh UI — overrides on top of Pico.css */
 
 :root {
   --primary-mesh: #2E86AB;
   --accent-mesh: #F18F01;
   --danger: #C0392B;
   --success: #27AE60;
+  --warning: #F39C12;
   --muted: #666;
 }
 
@@ -16,7 +17,6 @@ nav small { color: var(--muted); font-weight: normal; margin-left: 0.5rem; }
 footer { padding: 1rem; text-align: center; color: var(--muted); border-top: 1px solid var(--pico-muted-border-color); margin-top: 3rem; }
 footer a { color: var(--muted); }
 
-/* Health dot + badges */
 .dot {
   display: inline-block;
   width: 10px; height: 10px;
@@ -40,10 +40,11 @@ footer a { color: var(--muted); }
 .badge.primary { background: var(--primary-mesh); color: white; }
 .badge.accent { background: var(--accent-mesh); color: white; }
 .badge.danger { background: var(--danger); color: white; }
+.badge.success { background: var(--success); color: white; }
+.badge.warning { background: var(--warning); color: white; }
 
 .meta { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
 
-/* Tabs */
 .tabs {
   display: flex;
   gap: 0.25rem;
@@ -82,7 +83,6 @@ footer a { color: var(--muted); }
 .view { display: none; }
 .view.active { display: block; }
 
-/* Layout helpers */
 .row {
   display: flex;
   gap: 1rem;
@@ -110,7 +110,6 @@ article header {
   gap: 0.5rem;
 }
 
-/* Result rendering */
 .scroll {
   max-height: 500px;
   overflow: auto;
@@ -161,7 +160,6 @@ table.result tbody tr:hover {
 .stream-row.event-complete { color: var(--success); font-weight: 600; }
 .stream-row.event-error { color: var(--danger); }
 
-/* Cluster panels */
 .entity-list ul { list-style: none; padding: 0; margin: 0; }
 .entity-list li {
   padding: 0.5rem 0;
@@ -174,6 +172,7 @@ table.result tbody tr:hover {
 }
 .entity-list li:last-child { border-bottom: none; }
 .entity-list .name { font-weight: 600; color: var(--primary-mesh); }
+.entity-list .clickable-name { cursor: pointer; text-decoration: underline dotted; }
 .entity-list .cap {
   font-family: var(--pico-font-family-monospace);
   font-size: 0.75rem;
@@ -182,6 +181,80 @@ table.result tbody tr:hover {
   border-radius: 3px;
   margin-right: 0.25rem;
 }
+
+/* Sparkline dashboard cards */
+.sparkline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.sparkline-card {
+  padding: 0.75rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 6px;
+  background: var(--pico-card-background-color);
+  position: relative;
+}
+.sparkline-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.sparkline-value {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.75rem;
+  font-weight: 600;
+  color: var(--primary-mesh);
+  font-size: 1.1rem;
+}
+.sparkline-card canvas {
+  width: 100%;
+  max-height: 60px;
+}
+
+/* Snippet library */
+.pg-grid {
+  grid-template-columns: 220px 1fr;
+  gap: 1rem;
+}
+@media (max-width: 800px) {
+  .pg-grid { grid-template-columns: 1fr; }
+}
+.snippet-panel {
+  max-height: 700px;
+  overflow-y: auto;
+}
+.snippet-panel .snippet-category {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0.75rem 0 0.25rem 0;
+  letter-spacing: 0.05em;
+}
+.snippet-panel .snippet-item {
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+}
+.snippet-panel .snippet-item:hover {
+  background: var(--pico-muted-border-color);
+  border-color: var(--pico-muted-border-color);
+}
+.snippet-panel .snippet-item .snippet-name {
+  font-weight: 500;
+  color: var(--primary-mesh);
+}
+.snippet-panel .snippet-item .snippet-desc {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-top: 0.1rem;
+}
+
+.pg-main article { margin-bottom: 1rem; }
 
 /* History */
 #pg-history .history-item {
@@ -204,3 +277,34 @@ table.result tbody tr:hover {
   white-space: nowrap;
 }
 #pg-history .history-meta { color: var(--muted); font-size: 0.8rem; }
+
+/* Friendly cluster status */
+.cluster-status-callout {
+  padding: 0.75rem;
+  border-radius: 6px;
+  border-left: 4px solid var(--muted);
+  background: var(--pico-card-background-color);
+  margin-bottom: 0.5rem;
+}
+.cluster-status-callout.ok { border-left-color: var(--success); }
+.cluster-status-callout.warn { border-left-color: var(--warning); }
+.cluster-status-callout.err { border-left-color: var(--danger); }
+.cluster-status-callout p { margin: 0.25rem 0; }
+.cluster-status-callout p.title { font-weight: 600; }
+
+.agent-row-status {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.agent-row-status.HEALTHY { background: var(--success); color: white; }
+.agent-row-status.MISSING { background: var(--danger); color: white; }
+.agent-row-status.ORPHAN { background: var(--pico-muted-border-color); color: var(--pico-color); }
+.agent-row-status.SELF_REGISTERED { background: #E3F2FD; color: var(--primary-mesh); border: 1px solid var(--primary-mesh); }
+
+/* Schema panel */
+#schema-panel { border: 2px solid var(--primary-mesh); }
+#schema-fields dl { margin: 0; }
+#schema-fields dt { font-weight: 600; color: var(--primary-mesh); margin-top: 0.5rem; font-family: var(--pico-font-family-monospace); font-size: 0.85rem; }
+#schema-fields dd { margin: 0 0 0 1rem; color: var(--muted); font-size: 0.85rem; }
