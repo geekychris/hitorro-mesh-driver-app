@@ -88,7 +88,38 @@ const insertAtCursor = (s) => {
 // Shape: { id, tableName, title, snippets: [{name, desc, sql}] }.
 let pgDatasetContext = null;
 
+// Set to a win-context object when the user arrived at Playground via a
+// "Try in Playground" button on the wins panel. Mutually exclusive with
+// pgDatasetContext — setting one clears the other.
+// Shape: { win: {...raw win...}, snippets: [{name, desc, sql}] }.
+let pgWinContext = null;
+
 function renderSnippets() {
+  // Win-tuned mode: shows the win's own SQL, one Peek-per-dataset, and
+  // related wins that share ≥1 dataset with the active one. Takes priority
+  // over dataset context because a win spans several datasets — the single-
+  // dataset-tuned snippets would be misleading here.
+  if (pgWinContext) {
+    const ctx = pgWinContext;
+    $('#snippet-list').innerHTML = `
+      <div class="snippet-category">${esc(ctx.win.title)}</div>
+      ${ctx.snippets.map((s, i) => `
+        <div class="snippet-item" data-winidx="${i}">
+          <div class="snippet-name">${esc(s.name)}</div>
+          <div class="snippet-desc">${esc(s.desc)}</div>
+        </div>`).join('')}
+    `;
+    $$('#snippet-list .snippet-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const s = ctx.snippets[+el.dataset.winidx];
+        setSql(s.sql);
+        if (s.semantic != null) $('#pg-semantic').checked = !!s.semantic;
+        focusEditor();
+      });
+    });
+    return;
+  }
+
   // Dataset-tuned mode: replace the generic library with per-column
   // queries built from the current dataset's manifest.
   if (pgDatasetContext) {
@@ -202,8 +233,11 @@ function setPlaygroundDatasetContext(manifest, tableName) {
     title: manifest.title,
     snippets,
   };
+  pgWinContext = null;   // mutually exclusive
 
   $('#pg-context-name').textContent = manifest.title || tableName;
+  $('#pg-context-kind').textContent = '▶ Playing with';
+  $('#pg-context-meta').textContent = '— snippets + schema tuned to this dataset';
   $('#pg-context').hidden = false;
   // Ensure the Snippets sub-tab is open so the tuned list is visible.
   const lpSnippetsBtn = document.querySelector('[data-lp="lp-snippets"]');
@@ -214,8 +248,77 @@ function setPlaygroundDatasetContext(manifest, tableName) {
   $('#pg-semantic').checked = true;
 }
 
+/**
+ * Called by the Datasets tab's wins-panel "Try in Playground" buttons
+ * before switching tabs. Records win context, populates snippets that
+ * make sense at the intersection of several datasets (the win's SQL,
+ * a Peek per involved dataset, related wins).
+ *
+ * @param win     the raw win object from /mesh/datasets/wins
+ * @param allWins the full wins array — used to derive related wins
+ */
+function setPlaygroundWinContext(win, allWins) {
+  const involved = new Set(win.datasets || []);
+  const snippets = [];
+
+  // The win itself — top of the list so re-clicking the snippet
+  // re-drops the exact SQL if you scrolled elsewhere in the editor.
+  snippets.push({
+    name: `▶ ${win.title}`,
+    desc: 'the query you just loaded',
+    sql: win.sql,
+    semantic: !!win.semantic,
+  });
+
+  // A Peek per involved dataset — quick "what's in this table?".
+  // Uses the SQL table name (snake_case of id) that the mesh registers.
+  (win.datasets || []).forEach(dsId => {
+    const tableName = dsId.replace(/-/g, '_');
+    snippets.push({
+      name: `Peek ${tableName}`,
+      desc: `SELECT * FROM ${tableName} LIMIT 10`,
+      sql: `SELECT * FROM ${tableName} LIMIT 10`,
+      semantic: false,
+    });
+  });
+
+  // Related wins — any other win sharing ≥ 1 dataset with the active one.
+  // Sorted by number of shared datasets DESC then title, so the most
+  // related surfaces first.
+  const related = (allWins || [])
+    .filter(w => w !== win)
+    .map(w => ({
+      w,
+      shared: (w.datasets || []).filter(d => involved.has(d)).length,
+    }))
+    .filter(x => x.shared > 0)
+    .sort((a, b) => b.shared - a.shared || a.w.title.localeCompare(b.w.title));
+  related.forEach(({ w, shared }) => {
+    snippets.push({
+      name: `⇢ ${w.title}`,
+      desc: `${w.kind} · ${w.hops}-hop · shares ${shared} dataset${shared > 1 ? 's' : ''}`,
+      sql: w.sql,
+      semantic: !!w.semantic,
+    });
+  });
+
+  pgWinContext = { win, snippets };
+  pgDatasetContext = null;   // mutually exclusive
+
+  const chipRow = (win.datasets || []).map(d => `<code>${esc(d)}</code>`).join(' → ');
+  $('#pg-context-name').innerHTML = `${esc(win.title)} <span class="meta">${chipRow}</span>`;
+  $('#pg-context-kind').textContent = '▶ Exploring cross-dataset join:';
+  $('#pg-context-meta').textContent = win.note ? win.note.split('\n')[0] : '';
+  $('#pg-context').hidden = false;
+  const lpSnippetsBtn = document.querySelector('[data-lp="lp-snippets"]');
+  if (lpSnippetsBtn && !lpSnippetsBtn.classList.contains('active')) lpSnippetsBtn.click();
+  renderSnippets();
+  $('#pg-semantic').checked = !!win.semantic;
+}
+
 function clearPlaygroundDatasetContext() {
   pgDatasetContext = null;
+  pgWinContext = null;
   $('#pg-context').hidden = true;
   renderSnippets();
 }
@@ -392,8 +495,14 @@ async function loadWins() {
   $$('.ds-win-card .ds-win-try').forEach((btn, i) => {
     btn.addEventListener('click', () => {
       const w = wins[i];
+      // Prime the Playground left panel with THIS win's context —
+      // the win SQL as snippet #1, a Peek per involved dataset,
+      // then related wins that share ≥ 1 dataset. Without this the
+      // Snippets panel would keep whatever it was before (single-
+      // dataset snippets or the generic library), which reads to a
+      // user as "the Playground didn't tune to my join".
+      setPlaygroundWinContext(w, wins);
       if (typeof setSql === 'function') setSql(w.sql);
-      if (w.semantic) $('#pg-semantic').checked = true;
       const pg = document.querySelector('[data-target="playground"]');
       if (pg) pg.click();
     });
