@@ -26,4 +26,15 @@ public class UiRedirectController {
     public String redirectToUi() {
         return "redirect:/ui/index.html";
     }
+
+    /**
+     * Same friendly redirect for the trailing-slash form. Spring Boot's
+     * default static handler serves {@code /ui/index.html} directly but
+     * doesn't resolve {@code /ui/} as a directory index — users typing the
+     * bare {@code /ui/} URL used to land on the whitelabel 404 page.
+     */
+    @GetMapping({"/ui", "/ui/"})
+    public String redirectToUiIndex() {
+        return "redirect:/ui/index.html";
+    }
 }
