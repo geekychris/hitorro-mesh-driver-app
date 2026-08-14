@@ -45,33 +45,47 @@ footer a { color: var(--muted); }
 
 .meta { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
 
+/* Explicit hard-coded colors + higher specificity so we always beat
+   Pico's default `button` type-selector styles (which paint buttons
+   with a solid primary background — invisible when transparent bg is
+   the intent). Applies to .tabs, .sub-tabs, and .left-tabs. */
 .tabs {
   display: flex;
   gap: 0.25rem;
-  border-bottom: 2px solid var(--pico-muted-border-color);
+  border-bottom: 2px solid #d5d5d5;
+  background: #ffffff;
   margin-bottom: 1rem;
   overflow-x: auto;
 }
-.tabs button {
-  background: transparent;
-  color: var(--pico-color);
-  border: none;
+main .tabs > button,
+article .tabs > button {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: #333333 !important;
+  border: none !important;
   padding: 0.6rem 1rem;
   margin: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
   cursor: pointer;
   font-weight: 500;
   white-space: nowrap;
   width: auto;
+  box-shadow: none !important;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.tabs button:hover {
-  background: var(--pico-muted-border-color);
+main .tabs > button:hover,
+article .tabs > button:hover {
+  background: #f0f4f7 !important;
+  color: #2E86AB !important;
 }
-.tabs button.active {
-  color: var(--primary-mesh);
-  border-bottom-color: var(--primary-mesh);
-  background: transparent;
+main .tabs > button.active,
+article .tabs > button.active {
+  color: #2E86AB !important;
+  border-bottom-color: #2E86AB !important;
+  font-weight: 600;
 }
 
 .tab-panel { display: none; }
