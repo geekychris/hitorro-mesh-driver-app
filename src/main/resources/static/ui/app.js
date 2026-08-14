@@ -857,6 +857,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'cluster') refreshCluster();
         if (target === 'metrics') refreshMetricsSnapshot();
         if (target === 'datasets') refreshDatasets();
+        if (target === 'pipelines') refreshPipelines();
       } else if (btn.dataset.view) {
         $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
         $('#' + target, btn.closest('article')).classList.add('active');
@@ -1758,3 +1759,152 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(refreshSparklines, 5000);
   armActiveAutoRefresh();
 });
+
+// ================================================================ PIPELINES
+// The Jobs / pipelines tab: bundled examples on the left, YAML editor + status
+// panel on the right, plus a rolling "recent runs" article at the bottom.
+// State loads lazily when the tab first activates.
+
+let plBundledLoaded = false;
+let plBundledCache  = {};
+let plActivePoll    = null;
+
+async function refreshPipelines() {
+  if (!plBundledLoaded) {
+    plBundledLoaded = true;
+    await loadBundledExamples();
+  }
+  await refreshRunHistory();
+}
+
+async function loadBundledExamples() {
+  try {
+    plBundledCache = await api('/mesh/jobs/bundled');
+  } catch (e) {
+    $('#pl-examples').innerHTML = `<p><small style="color:var(--danger)">error: ${esc(e.message)}</small></p>`;
+    return;
+  }
+  const names = Object.keys(plBundledCache);
+  if (names.length === 0) {
+    $('#pl-examples').innerHTML = '<p class="meta">No bundled examples on the classpath.</p>';
+    return;
+  }
+  $('#pl-examples').innerHTML = names.map(name => `
+    <div class="ds-list-item" data-name="${esc(name)}">
+      <div class="name">${esc(name)}</div>
+      <span class="meta">click to load into editor</span>
+    </div>
+  `).join('');
+  $$('#pl-examples .ds-list-item').forEach(el => {
+    el.addEventListener('click', () => {
+      $$('#pl-examples .ds-list-item').forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+      $('#pl-yaml').value = plBundledCache[el.dataset.name];
+    });
+  });
+  if (!$('#pl-yaml').value) {
+    $('#pl-yaml').value = plBundledCache[names[0]];
+    $('#pl-examples .ds-list-item')?.classList.add('active');
+  }
+}
+
+async function refreshRunHistory() {
+  let runs = [];
+  try { runs = await api('/mesh/jobs'); } catch (_) { }
+  if (!runs.length) {
+    $('#pl-history').innerHTML = '<p class="meta">no runs yet</p>';
+    return;
+  }
+  $('#pl-history').innerHTML = `
+    <table style="width:100%; font-size: 0.85rem;">
+      <thead><tr>
+        <th>Job spec</th><th>Job id</th><th>State</th>
+        <th>Started</th><th>Finished</th><th>Nodes</th>
+      </tr></thead>
+      <tbody>${runs.map(r => `
+        <tr>
+          <td>${esc(r.jobSpecName || '?')}</td>
+          <td><code>${esc(r.jobId)}</code></td>
+          <td><span class="badge pl-state-${esc(r.state.toLowerCase())}">${esc(r.state)}</span></td>
+          <td class="meta">${esc(r.startedAt || '')}</td>
+          <td class="meta">${esc(r.finishedAt || '')}</td>
+          <td>${r.nodes.length}</td>
+        </tr>`).join('')}</tbody>
+    </table>`;
+}
+
+$(document).body?.addEventListener?.('click', () => { }); // no-op
+
+document.addEventListener('DOMContentLoaded', () => {
+  const runBtn = $('#pl-run');
+  if (!runBtn) return;
+  runBtn.addEventListener('click', async () => {
+    const yaml = $('#pl-yaml').value.trim();
+    if (!yaml) { alert('paste or load a job spec first'); return; }
+    runBtn.disabled = true;
+    try {
+      const r = await api('/mesh/jobs/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/yaml' },
+        body: yaml,
+      });
+      $('#pl-status').hidden = false;
+      $('#pl-status-id').textContent = r.jobId;
+      startPolling(r.jobId);
+    } catch (e) {
+      alert('run failed: ' + e.message);
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+});
+
+function startPolling(jobId) {
+  if (plActivePoll) clearInterval(plActivePoll);
+  const started = Date.now();
+  const poll = async () => {
+    const s = await api('/mesh/jobs/' + jobId);
+    $('#pl-status-state').textContent = s.state;
+    $('#pl-status-state').className = 'badge pl-state-' + s.state.toLowerCase();
+    $('#pl-status-timing').textContent = ((Date.now() - started) / 1000).toFixed(1) + 's';
+    renderDag(s);
+    const events = await api('/mesh/jobs/' + jobId + '/events').catch(() => []);
+    $('#pl-events').innerHTML = events.map(e =>
+      `<div><code>${esc(e.at.slice(11,19))}</code> <b>${esc(e.nodeId)}</b> ${esc(e.kind)}: ${esc(e.message)}</div>`
+    ).join('');
+    if (s.state === 'SUCCEEDED' || s.state === 'FAILED' || s.state === 'CANCELLED') {
+      clearInterval(plActivePoll); plActivePoll = null;
+      refreshRunHistory();
+    }
+  };
+  poll();
+  plActivePoll = setInterval(poll, 500);
+}
+
+function renderDag(status) {
+  const nodes = status.nodes || [];
+  if (!nodes.length) { $('#pl-dag').innerHTML = '<p class="meta">no nodes</p>'; return; }
+  // Simple flow: one card per node, left-to-right. Arrows would need a real
+  // topological layout — Phase 2. This gives us state + counts today.
+  $('#pl-dag').innerHTML = `
+    <div style="display:flex; gap: 0.6rem; flex-wrap: wrap;">
+      ${nodes.map(n => `
+        <div class="pl-node pl-node-${esc(n.state.toLowerCase())}">
+          <div class="pl-node-hdr">
+            <b>${esc(n.id)}</b>
+            <span class="badge pl-state-${esc(n.state.toLowerCase())}">${esc(n.state)}</span>
+          </div>
+          <div class="pl-node-body">
+            <span class="meta">rowsIn:</span> <b>${n.rowsIn}</b>
+            &nbsp;<span class="meta">rowsOut:</span> <b>${n.rowsOut}</b>
+          </div>
+          <div class="pl-node-sinks">
+            ${Object.entries(n.sinkCounts || {}).map(([k, v]) =>
+              `<div><code>${esc(k)}</code> ${v}</div>`).join('')}
+          </div>
+          ${n.error ? `<div class="pl-node-err">${esc(n.error)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>`;
+}
+

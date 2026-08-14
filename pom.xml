@@ -185,6 +185,15 @@
             <version>3.0.1</version>
         </dependency>
 
+        <!-- DAG pipeline framework — self-contained (Jackson + optional Spring).
+             Autoconfig activates when Spring Boot is on the classpath and
+             registers the /mesh/jobs REST surface. -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-pipelines</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

@@ -650,6 +650,29 @@ table.result th.row-num-header {
 .agent-row-status.ORPHAN { background: var(--pico-muted-border-color); color: var(--pico-color); }
 .agent-row-status.SELF_REGISTERED { background: #E3F2FD; color: var(--primary-mesh); border: 1px solid var(--primary-mesh); }
 
+/* Pipelines tab */
+.pl-state-pending   { background: #eef; color: var(--muted); }
+.pl-state-running   { background: #fff5e0; color: #8a5a00; }
+.pl-state-succeeded { background: #e5f5ea; color: var(--success); }
+.pl-state-failed    { background: #fce4e4; color: var(--danger); }
+.pl-state-cancelled { background: #eef; color: var(--muted); }
+
+.pl-node {
+  min-width: 12rem; padding: 0.6rem 0.75rem;
+  border: 2px solid #ddd; border-radius: 0.35rem;
+  background: white;
+}
+.pl-node-pending   { border-color: #ddd; }
+.pl-node-running   { border-color: var(--warning); background: #fffbf0; }
+.pl-node-succeeded { border-color: var(--success); }
+.pl-node-failed    { border-color: var(--danger); background: #fdf3f3; }
+
+.pl-node-hdr { display:flex; justify-content: space-between; align-items:center; margin-bottom: 0.3rem; }
+.pl-node-body { font-size: 0.85rem; margin-bottom: 0.3rem; }
+.pl-node-sinks { font-size: 0.75rem; color: var(--muted); border-top: 1px dashed #eee; padding-top: 0.3rem; }
+.pl-node-sinks code { background: transparent; color: var(--primary-mesh); }
+.pl-node-err { color: var(--danger); font-size: 0.8rem; margin-top: 0.3rem; }
+
 /* Schema panel */
 #schema-panel { border: 2px solid var(--primary-mesh); }
 #schema-fields dl { margin: 0; }

@@ -31,6 +31,7 @@
   <div class="tabs" role="tablist">
     <button role="tab" data-target="cluster" class="active">Cluster</button>
     <button role="tab" data-target="datasets">Datasets</button>
+    <button role="tab" data-target="pipelines">Pipelines</button>
     <button role="tab" data-target="playground">Playground</button>
     <button role="tab" data-target="stream">Streaming</button>
     <button role="tab" data-target="explain">Explain</button>
@@ -450,6 +451,49 @@
     </article>
     <p><small>Auto-refreshes every 3 seconds while this tab is active.
       Cancel a query with the × button per row.</small></p>
+  </section>
+
+  <!-- ================== PIPELINES ================== -->
+  <section id="pipelines" class="tab-panel">
+    <div class="grid">
+      <!-- Left: bundled examples + job history -->
+      <article style="max-width: 22rem;">
+        <header>
+          <span>Bundled examples</span>
+          <small class="meta">click to load</small>
+        </header>
+        <div id="pl-examples" class="ds-list">loading…</div>
+      </article>
+
+      <!-- Right: editor + status -->
+      <article>
+        <header>
+          <span>Job spec (YAML)</span>
+          <span style="flex:1"></span>
+          <button id="pl-run" style="margin:0;padding:0.15rem 0.9rem;">▶ Run</button>
+        </header>
+        <textarea id="pl-yaml" rows="12" style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
+
+        <div id="pl-status" hidden style="margin-top: 0.75rem;">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <strong>Job:</strong> <code id="pl-status-id"></code>
+            <span id="pl-status-state" class="badge"></span>
+            <span style="flex:1"></span>
+            <small id="pl-status-timing" class="meta"></small>
+          </div>
+          <div id="pl-dag" style="margin-top: 0.5rem;"></div>
+          <details style="margin-top: 0.5rem;">
+            <summary class="meta">Progress events</summary>
+            <div id="pl-events" style="font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 12rem; overflow-y: auto;"></div>
+          </details>
+        </div>
+      </article>
+    </div>
+
+    <article>
+      <header>Recent runs</header>
+      <div id="pl-history">no runs yet</div>
+    </article>
   </section>
 
   <!-- ================== METRICS ================== -->
