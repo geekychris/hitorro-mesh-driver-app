@@ -51,6 +51,15 @@ public class MeshRestController {
     private final ClusterManager clusterManager;
     private final MeshMetrics metrics;
     /**
+     * Phase 7d — currently in-flight query handles keyed by queryId. Populated
+     * on submit, removed on completion / cancel. Backs
+     * {@code DELETE /mesh/queries/{queryId}} so callers can stop long-lived
+     * SSE queries without waiting for the deadline. Concurrent — the SSE
+     * completion callbacks and the DELETE endpoint may race on the same key.
+     */
+    private final java.util.concurrent.ConcurrentMap<String, QueryDispatcher.QueryHandle> activeQueries =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /**
      * One thread per active SSE query — each pulls rows from the QueryHandle
      * and pushes them to the client. Kept as an unbounded pool because SSE
      * connections are long-lived; capping would just push back-pressure
@@ -81,16 +90,54 @@ public class MeshRestController {
         // caller can inspect the {@code timedOut} field on the response.
         try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
                 req.sql, java.time.Duration.ofMillis(timeout))) {
-            List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
-            metrics.submitTimerOk().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
-            metrics.queriesOk().increment();
-            metrics.rowsReturned().increment(rows.size());
-            return new QueryResponse(h.queryId(), h.assignedAgents(), rows.size(), rows, h.timedOut());
+            activeQueries.put(h.queryId(), h);
+            try {
+                List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
+                metrics.submitTimerOk().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
+                metrics.queriesOk().increment();
+                metrics.rowsReturned().increment(rows.size());
+                return new QueryResponse(h.queryId(), h.assignedAgents(), rows.size(), rows, h.timedOut());
+            } finally {
+                activeQueries.remove(h.queryId());
+            }
         } catch (RuntimeException e) {
             metrics.submitTimerErr().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
             metrics.queriesErr().increment();
             throw e;
         }
+    }
+
+    /**
+     * Phase 7d — explicit query cancel. Closes the handle (which publishes
+     * a {@link com.hitorro.mesh.CancelMessage} to interrupt any in-flight
+     * agent tasks for this queryId) and removes it from the active-query
+     * registry. Returns 404 if the query is unknown (never registered,
+     * already completed, or already cancelled).
+     *
+     * <p>Idempotent — a repeat DELETE returns 404 the second time, not an
+     * error.</p>
+     */
+    @DeleteMapping("/queries/{queryId}")
+    public java.util.Map<String, Object> cancel(@PathVariable String queryId) {
+        QueryDispatcher.QueryHandle h = activeQueries.remove(queryId);
+        if (h == null) {
+            throw new IllegalArgumentException("no active query with id: " + queryId);
+        }
+        h.close();
+        log.info("query cancelled by client: {}", queryId);
+        return java.util.Map.of("queryId", queryId, "cancelled", true);
+    }
+
+    /** Phase 7d — list currently in-flight queries (for operator visibility). */
+    @GetMapping("/queries")
+    public java.util.List<java.util.Map<String, Object>> activeQueries() {
+        java.util.List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
+        for (var e : activeQueries.entrySet()) {
+            out.add(java.util.Map.of(
+                    "queryId", e.getKey(),
+                    "assignedAgents", e.getValue().assignedAgents()));
+        }
+        return out;
     }
 
     /**
@@ -147,9 +194,17 @@ public class MeshRestController {
         // keep the result subscription alive for a dead client. If the source
         // is streaming this doesn't stop the agents (phase 6c.2 will), but
         // it stops the driver from receiving further rows.
-        emitter.onCompletion(handle::close);
-        emitter.onTimeout(() -> { handle.close(); emitter.complete(); });
-        emitter.onError(t -> handle.close());
+        // Phase 7d — also deregister from activeQueries so DELETE doesn't
+        // race with a naturally-completing SSE query.
+        activeQueries.put(handle.queryId(), handle);
+        final QueryDispatcher.QueryHandle finalHandle = handle;
+        Runnable cleanup = () -> {
+            finalHandle.close();
+            activeQueries.remove(finalHandle.queryId());
+        };
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(() -> { cleanup.run(); emitter.complete(); });
+        emitter.onError(t -> cleanup.run());
 
         long sseStart = System.nanoTime();
         // Background worker: pull rows, push events. One row per SSE event.
