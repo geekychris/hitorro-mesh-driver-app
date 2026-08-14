@@ -318,6 +318,52 @@ table.result tbody tr:hover {
 }
 .ds-quick button:hover { background: var(--primary-mesh); color: white; }
 
+/* "Joins that work" wins panel — cards above the datasets grid */
+.ds-wins-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.75rem;
+  padding: 0.25rem;
+}
+.ds-win-card {
+  background: #f8f9fa;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 0.35rem;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  transition: box-shadow 0.15s ease;
+}
+.ds-win-card:hover { box-shadow: 0 2px 6px rgba(46, 134, 171, 0.15); }
+.ds-win-hdr {
+  display: flex; gap: 0.35rem; margin-bottom: 0.35rem; flex-wrap: wrap; align-items: center;
+}
+.ds-win-kind, .ds-win-hops, .ds-win-license {
+  font-size: 0.7rem; padding: 0.05rem 0.45rem; border-radius: 0.2rem;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.ds-win-kind-exact-id  { background: #2E86AB; color: white; }
+.ds-win-kind-spatial   { background: var(--accent-mesh); color: white; }
+.ds-win-kind-hub       { background: var(--success); color: white; }
+.ds-win-kind-mixed     { background: #7f8c8d; color: white; }
+.ds-win-hops           { background: #eef; color: var(--primary-mesh); }
+.ds-win-license                       { background: #eef; color: var(--muted); }
+.ds-win-license-share-alike           { background: #fce4e4; color: var(--danger); }
+.ds-win-license-attribution-required  { background: #fff5e0; color: #8a5a00; }
+.ds-win-license-permissive            { background: #e5f5ea; color: var(--success); }
+.ds-win-title { font-weight: 700; color: #333; margin-bottom: 0.35rem; line-height: 1.25; }
+.ds-win-datasets { color: var(--muted); font-size: 0.75rem; margin-bottom: 0.4rem; line-height: 1.5; }
+.ds-win-datasets code {
+  background: #eef; padding: 0.05rem 0.35rem; border-radius: 0.15rem; font-size: 0.85em;
+}
+.ds-win-note {
+  font-size: 0.75rem; color: var(--muted); line-height: 1.5;
+  margin-bottom: 0.5rem; white-space: pre-line;
+}
+.ds-win-actions { margin-top: 0.4rem; }
+.ds-win-actions button {
+  padding: 0.25rem 0.75rem; font-size: 0.75rem; margin: 0;
+}
+
 /* "About this dataset" block — first thing users see after the header */
 .ds-about h5 {
   margin: 0.75rem 0 0.25rem 0;

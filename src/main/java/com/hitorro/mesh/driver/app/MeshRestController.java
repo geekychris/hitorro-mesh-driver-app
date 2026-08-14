@@ -570,6 +570,20 @@ public class MeshRestController {
     // scan). No driver-side state to manage.
 
     /**
+     * Curated cross-dataset join examples ("wins") that return real rows
+     * against a fully-installed mesh today. Backed by
+     * {@code /joinable-wins.yaml} in the datasets jar. UI renders them
+     * as clickable cards under a "Joins that work" section on the
+     * Datasets tab.
+     *
+     * <p>Empty list if the datasets module isn't on the classpath.</p>
+     */
+    @GetMapping("/datasets/wins")
+    public List<com.hitorro.mesh.datasets.model.JoinableWin> listWins() {
+        return com.hitorro.mesh.datasets.loader.JoinableWinsLoader.loadBundled();
+    }
+
+    /**
      * List every dataset the driver's registry knows about. Compact
      * summary — one row per manifest. Response shape:
      *

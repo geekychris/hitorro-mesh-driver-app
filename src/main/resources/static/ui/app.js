@@ -355,8 +355,58 @@ function saveCurrentQuery() {
 
 let dsCatalog = null;      // array of summaries from /mesh/datasets
 let dsSelectedId = null;   // currently-focused dataset id
+// Wins are static-per-jar; load once per Datasets-tab activation.
+let dsWinsLoaded = false;
+
+async function loadWins() {
+  if (dsWinsLoaded) return;
+  dsWinsLoaded = true;
+  let wins = [];
+  try { wins = await api('/mesh/datasets/wins'); } catch (_) {}
+  const panel = $('#ds-wins-panel');
+  const grid = $('#ds-wins-grid');
+  const count = $('#ds-wins-count');
+  if (!wins || wins.length === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  count.textContent = `${wins.length} curated cross-dataset queries`;
+  grid.innerHTML = wins.map((w, i) => `
+    <div class="ds-win-card" data-idx="${i}">
+      <div class="ds-win-hdr">
+        <span class="ds-win-kind ds-win-kind-${esc(w.kind)}">${esc(w.kind)}</span>
+        <span class="ds-win-hops">${w.hops}-hop</span>
+        <span class="ds-win-license ds-win-license-${esc((w.license||'').replace(/[^a-z]/g,'-'))}">${esc(w.license || '')}</span>
+      </div>
+      <div class="ds-win-title">${esc(w.title)}</div>
+      <div class="ds-win-datasets">
+        ${(w.datasets || []).map(d => `<code>${esc(d)}</code>`).join(' → ')}
+      </div>
+      ${w.note ? `<div class="ds-win-note">${esc(w.note)}</div>` : ''}
+      <div class="ds-win-actions">
+        <button class="secondary outline ds-win-try" title="send SQL to the Playground editor">▶ Try in Playground</button>
+      </div>
+    </div>
+  `).join('');
+  $$('.ds-win-card .ds-win-try').forEach((btn, i) => {
+    btn.addEventListener('click', () => {
+      const w = wins[i];
+      if (typeof setSql === 'function') setSql(w.sql);
+      if (w.semantic) $('#pg-semantic').checked = true;
+      const pg = document.querySelector('[data-target="playground"]');
+      if (pg) pg.click();
+    });
+  });
+  $('#ds-wins-toggle').addEventListener('click', () => {
+    const hidden = grid.style.display === 'none';
+    grid.style.display = hidden ? '' : 'none';
+    $('#ds-wins-toggle').textContent = hidden ? 'Hide' : 'Show';
+  });
+}
 
 async function refreshDatasets() {
+  loadWins();  // parallel — doesn't block dataset list
   try {
     dsCatalog = await api('/mesh/datasets');
   } catch (e) {

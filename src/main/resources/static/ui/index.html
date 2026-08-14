@@ -190,6 +190,19 @@
 
   <!-- ================== DATASETS ================== -->
   <section id="datasets" class="tab-panel">
+    <!-- Wins: cross-dataset joins that return real rows today. Loaded
+         from /mesh/datasets/wins. Above the grid so users see what's
+         possible before clicking into any single dataset. -->
+    <article id="ds-wins-panel" hidden style="margin-bottom: 1rem;">
+      <header>
+        <span>Joins that work</span>
+        <span id="ds-wins-count" class="meta">—</span>
+        <button id="ds-wins-toggle" class="secondary outline"
+                style="float: right; padding: 0.15rem 0.6rem; font-size: 0.8em; margin: 0;">Hide</button>
+      </header>
+      <div id="ds-wins-grid" class="ds-wins-grid">Loading…</div>
+    </article>
+
     <div class="grid ds-grid">
       <!-- LEFT: dataset list -->
       <article class="ds-left-panel">
