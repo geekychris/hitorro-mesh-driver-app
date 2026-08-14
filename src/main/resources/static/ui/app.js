@@ -234,6 +234,209 @@ function saveCurrentQuery() {
 }
 
 // ================================================================ TABS
+// ================================================================ DATASETS TAB
+// Backed by /mesh/datasets (summary) + /mesh/datasets/{id} (full manifest).
+// Both endpoints come from hitorro-mesh-datasets; when that module isn't on
+// the driver's classpath, /mesh/datasets returns [] and this tab just shows
+// "no installed datasets".
+
+let dsCatalog = null;      // array of summaries from /mesh/datasets
+let dsSelectedId = null;   // currently-focused dataset id
+
+async function refreshDatasets() {
+  try {
+    dsCatalog = await api('/mesh/datasets');
+  } catch (e) {
+    $('#ds-list').innerHTML = `<p><small style="color:var(--danger)">error: ${esc(e.message)}</small></p>`;
+    return;
+  }
+  $('#ds-count').textContent = `${dsCatalog.length} installed`;
+  if (dsCatalog.length === 0) {
+    $('#ds-list').innerHTML =
+      '<p class="meta">No datasets installed yet.<br>' +
+      'Run <code>./scripts/install-all.sh</code> in the hitorro-mesh-datasets repo.</p>';
+    return;
+  }
+  $('#ds-list').innerHTML = dsCatalog.map(d => `
+    <div class="ds-list-item ${d.id === dsSelectedId ? 'active' : ''}" data-id="${esc(d.id)}">
+      <div class="name">${esc(d.title || d.id)}</div>
+      <span class="meta">
+        <code>${esc(d.tableName)}</code> ·
+        ${esc(d.spdx || 'no-license')} ·
+        ${esc(d.kind)} ·
+        ${d.fields} fields
+      </span>
+    </div>
+  `).join('');
+  $$('#ds-list .ds-list-item').forEach(el => {
+    el.addEventListener('click', () => selectDataset(el.dataset.id));
+  });
+  // Auto-select the first dataset when nothing chosen yet, so the right
+  // pane isn't blank when the user first opens the tab.
+  if (!dsSelectedId && dsCatalog.length > 0) selectDataset(dsCatalog[0].id);
+}
+
+async function selectDataset(id) {
+  dsSelectedId = id;
+  $$('#ds-list .ds-list-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.id === id));
+  $('#ds-empty').hidden = true;
+  $('#ds-selected').hidden = false;
+
+  let manifest;
+  try {
+    manifest = await api('/mesh/datasets/' + encodeURIComponent(id));
+  } catch (e) {
+    $('#ds-schema-body').innerHTML =
+      `<p><small style="color:var(--danger)">manifest fetch failed: ${esc(e.message)}</small></p>`;
+    return;
+  }
+
+  const tableName = id.replace(/-/g, '_');
+  const summary = (dsCatalog || []).find(d => d.id === id) || {};
+
+  // Header + badges
+  $('#ds-title').textContent = manifest.title || id;
+  const spdx = manifest.license?.spdx || '';
+  const licenseClass = spdx.startsWith('CC0') ? 'license-cc0'
+                     : spdx.startsWith('CC-BY') ? 'license-cc-by'
+                     : spdx.startsWith('Public') ? 'license-pd'
+                     : spdx.startsWith('ODbL') ? 'license-odbl'
+                     : '';
+  $('#ds-badges').innerHTML = `
+    <span class="ds-badge ${licenseClass}">${esc(spdx || 'no-license')}</span>
+    <span class="ds-badge kind">${esc(summary.kind || 'unknown')}</span>
+    <span class="meta">
+      · table <code>${esc(tableName)}</code>
+      · PK <code>${esc(manifest.record?.primaryKey || '—')}</code>
+    </span>
+  `;
+
+  // Schema table — highlight fields with a role (that's the whole story
+  // of semantic joins).
+  const fields = manifest.record?.fields || [];
+  $('#ds-schema-body').innerHTML = fields.length === 0 ? '<p class="meta">no fields declared</p>' : `
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Type</th><th>Role</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+      ${fields.map(f => `
+        <tr>
+          <td><code>${esc(f.name)}</code></td>
+          <td>${esc(f.type || '')}</td>
+          <td>${f.role ? `<span class="ds-role">${esc(f.role)}</span>` : ''}</td>
+          <td>${esc(f.description || '')}</td>
+        </tr>
+      `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  // Relationships — one card per declared join edge.
+  const rels = manifest.relationships || [];
+  $('#ds-rels-body').innerHTML = rels.length === 0 ? '<p class="meta">no relationships declared</p>' : rels.map(r => {
+    const cls = (r.kind || '').toLowerCase();
+    const via = Array.isArray(r.via) ? r.via.join(', ') : (r.via || '');
+    return `
+      <div class="ds-rel ${esc(cls)}">
+        <span class="kind">${esc(r.kind)}</span>
+        → <code>${esc((r.target || '').replace(/-/g, '_'))}</code>
+        via <code>${esc(via)}</code>
+      </div>
+    `;
+  }).join('');
+
+  // Sample rows are lazy — click Refresh to fetch. Avoids hammering the
+  // driver with a query per dataset click.
+  $('#ds-sample-body').innerHTML = 'click Refresh to run <code>SELECT * LIMIT 10</code>';
+
+  // Quick queries — build off the declared roles + relationships.
+  $('#ds-quick').innerHTML = buildQuickQueries(tableName, manifest, rels);
+  $$('#ds-quick button').forEach(b => {
+    b.addEventListener('click', () => {
+      // Copy this dataset's query into the Playground editor and switch tabs.
+      const sql = b.dataset.sql;
+      if (typeof setSql === 'function') setSql(sql);
+      // Programmatic tab switch — mimic clicking the Playground tab button.
+      const pg = document.querySelector('[data-target="playground"]');
+      if (pg) pg.click();
+    });
+  });
+
+  // Raw manifest (for the curious / for copy-paste)
+  $('#ds-raw').textContent = fmtJson(manifest);
+}
+
+function buildQuickQueries(tableName, manifest, rels) {
+  const buttons = [];
+  buttons.push({
+    label: 'SELECT * LIMIT 20',
+    sql: `SELECT * FROM ${tableName} LIMIT 20`,
+  });
+  const pk = manifest.record?.primaryKey;
+  if (pk) {
+    buttons.push({
+      label: `COUNT by ${pk} …`,
+      sql: `SELECT ${pk}, COUNT(*) AS n FROM ${tableName} GROUP BY ${pk} ORDER BY n DESC LIMIT 20`,
+    });
+  }
+  // Any field with role starting id.* → group-by is usually informative
+  // (country codes, network flags, etc.).
+  const roleGroups = (manifest.record?.fields || []).filter(f =>
+    f.role && f.role.startsWith('id.') && f.name !== pk);
+  roleGroups.slice(0, 3).forEach(f => {
+    buttons.push({
+      label: `GROUP BY ${f.name}`,
+      sql: `SELECT ${f.name}, COUNT(*) AS n FROM ${tableName} GROUP BY ${f.name} ORDER BY n DESC LIMIT 20`,
+    });
+  });
+  // Relationships → USING PLACE join examples.
+  (rels || []).filter(r => r.kind === 'EXACT_ID').slice(0, 3).forEach(r => {
+    const target = (r.target || '').replace(/-/g, '_');
+    buttons.push({
+      label: `JOIN ${target} USING PLACE`,
+      sql: `SELECT *\nFROM ${tableName} a\nJOIN ${target} b USING PLACE\nLIMIT 10`,
+    });
+  });
+  return buttons.map(b => `
+    <button data-sql="${esc(b.sql)}" title="${esc(b.sql)}">${esc(b.label)}</button>
+  `).join('');
+}
+
+async function refreshSample() {
+  if (!dsSelectedId) return;
+  const tableName = dsSelectedId.replace(/-/g, '_');
+  $('#ds-sample-body').innerHTML = '<span class="meta">running…</span>';
+  try {
+    const body = await api('/mesh/queries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: `SELECT * FROM ${tableName} LIMIT 10`, timeoutMs: 8000 }),
+    });
+    if (!body.rows || body.rows.length === 0) {
+      $('#ds-sample-body').innerHTML = '<p class="meta">no rows</p>';
+      return;
+    }
+    const cols = Object.keys(body.rows[0]);
+    $('#ds-sample-body').innerHTML = `
+      <div style="overflow-x: auto;">
+        <table>
+          <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${body.rows.map(r => `<tr>${cols.map(c =>
+              `<td>${esc(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])}</td>`).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <small class="meta">${body.rowCount} rows · queryId ${esc(body.queryId)}</small>
+    `;
+  } catch (e) {
+    $('#ds-sample-body').innerHTML =
+      `<p><small style="color:var(--danger)">${esc(e.body?.error || e.message)}</small></p>`;
+  }
+}
+
 function bindTabs(rootSel = '.tabs') {
   $$(`${rootSel} > button`).forEach(btn => {
     if (btn._bound) return;
@@ -250,6 +453,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'active') refreshActive();
         if (target === 'cluster') refreshCluster();
         if (target === 'metrics') refreshMetricsSnapshot();
+        if (target === 'datasets') refreshDatasets();
       } else if (btn.dataset.view) {
         $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
         $('#' + target, btn.closest('article')).classList.add('active');
@@ -1071,6 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#stream-stop').addEventListener('click', cancelStream);
   $('#active-refresh').addEventListener('click', refreshActive);
   $('#schema-close').addEventListener('click', () => { $('#schema-panel').hidden = true; });
+  $('#ds-sample-refresh').addEventListener('click', refreshSample);
 
   // Phase 7p — runtime table/broadcast registration forms.
   $('#add-table-btn').addEventListener('click', () => {

@@ -10,6 +10,8 @@ import com.hitorro.mesh.driver.DistributedTableRegistry;
 import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.mesh.driver.QueryDispatcher;
 import com.hitorro.mesh.driver.QueryPlanner;
+import com.hitorro.mesh.datasets.model.Manifest;
+import com.hitorro.mesh.datasets.registry.DatasetRegistry;
 import com.hitorro.mesh.datasets.semantic.PlaceJoinRewriter;
 import com.hitorro.mesh.datasets.semantic.SemanticJoinException;
 import com.hitorro.mesh.orion.ClusterManager;
@@ -86,14 +88,23 @@ public class MeshRestController {
      * responds with a 400 (clear error, not a silent pass-through).
      */
     private final PlaceJoinRewriter placeJoinRewriter;
+    /**
+     * Same optionality story as {@link #placeJoinRewriter} — provided by
+     * the datasets module's Spring autoconfig. Backs the
+     * {@code GET /mesh/datasets} + {@code GET /mesh/datasets/{id}} endpoints
+     * the UI's Datasets tab uses.
+     */
+    private final DatasetRegistry datasetRegistry;
 
     @Autowired
     public MeshRestController(MeshDriver driver, ClusterManager clusterManager, MeshMetrics metrics,
-                              @Autowired(required = false) PlaceJoinRewriter placeJoinRewriter) {
+                              @Autowired(required = false) PlaceJoinRewriter placeJoinRewriter,
+                              @Autowired(required = false) DatasetRegistry datasetRegistry) {
         this.driver = driver;
         this.clusterManager = clusterManager;
         this.metrics = metrics;
         this.placeJoinRewriter = placeJoinRewriter;
+        this.datasetRegistry = datasetRegistry;
     }
 
     @PostMapping("/queries")
@@ -550,6 +561,70 @@ public class MeshRestController {
 
     public static class RegisterBroadcastRequest {
         public String name;
+    }
+
+    // ------------------------------------------------------------------
+    // Datasets metadata — backs the UI's Datasets tab. Everything served
+    // here comes straight out of the DatasetRegistry the datasets module
+    // populates on startup (bundled manifests + $HITORRO_DATASETS_HOME
+    // scan). No driver-side state to manage.
+
+    /**
+     * List every dataset the driver's registry knows about. Compact
+     * summary — one row per manifest. Response shape:
+     *
+     * <pre>
+     * [
+     *   {"id":"wikidata-cities","tableName":"wikidata_cities",
+     *    "title":"...","spdx":"CC0-1.0",
+     *    "kind":"broadcast","primaryKey":"wikidata_qid",
+     *    "produces":["wikidata"],"maps":["geonames","iso3166alpha2"],
+     *    "relationships": 3, "fields": 8}
+     * ]
+     * </pre>
+     */
+    @GetMapping("/datasets")
+    public List<Map<String, Object>> listDatasets() {
+        if (datasetRegistry == null) return List.of();
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Manifest m : datasetRegistry.all()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", m.id());
+            row.put("tableName", m.id().replace('-', '_'));
+            row.put("title", m.title());
+            row.put("spdx", m.license() != null ? m.license().spdx() : null);
+            row.put("kind", m.partitionBy() == null ? "broadcast" : "distributed");
+            row.put("primaryKey", m.record() != null ? m.record().primaryKey() : null);
+            row.put("produces", m.identifiers() != null ? m.identifiers().produces() : List.of());
+            row.put("maps",     m.identifiers() != null ? m.identifiers().maps()     : List.of());
+            row.put("relationships", m.relationships() != null ? m.relationships().size() : 0);
+            row.put("fields", m.record() != null && m.record().fields() != null ? m.record().fields().size() : 0);
+            out.add(row);
+        }
+        return out;
+    }
+
+    /**
+     * Full manifest for one dataset. Serialised straight from the record —
+     * fields, license, source, identifiers, relationships. The UI's
+     * Datasets tab reads this to render schema tables, relationship lists,
+     * and quick-query buttons per field role.
+     */
+    @GetMapping("/datasets/{id}")
+    public Manifest getDataset(@PathVariable("id") String id) {
+        if (datasetRegistry == null) {
+            throw new IllegalArgumentException(
+                    "datasets module not on classpath — no manifests available");
+        }
+        Manifest m = datasetRegistry.get(id);
+        if (m == null) {
+            // Try the SQL table-name form too — the UI may pass either.
+            m = datasetRegistry.byTableName(id);
+        }
+        if (m == null) {
+            throw new IllegalArgumentException("no dataset registered under id: " + id);
+        }
+        return m;
     }
 
     /**

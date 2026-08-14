@@ -30,6 +30,7 @@
 
   <div class="tabs" role="tablist">
     <button role="tab" data-target="cluster" class="active">Cluster</button>
+    <button role="tab" data-target="datasets">Datasets</button>
     <button role="tab" data-target="playground">Playground</button>
     <button role="tab" data-target="stream">Streaming</button>
     <button role="tab" data-target="explain">Explain</button>
@@ -185,6 +186,64 @@
         </article>
       </div>
     </article>
+  </section>
+
+  <!-- ================== DATASETS ================== -->
+  <section id="datasets" class="tab-panel">
+    <div class="grid ds-grid">
+      <!-- LEFT: dataset list -->
+      <article class="ds-left-panel">
+        <header>
+          <span>Installed datasets</span>
+          <span id="ds-count" class="meta">—</span>
+        </header>
+        <div id="ds-list" class="ds-list">Loading…</div>
+      </article>
+
+      <!-- RIGHT: selected-dataset detail -->
+      <article class="ds-detail" id="ds-detail">
+        <div id="ds-empty" class="meta" style="padding: 2rem; text-align: center;">
+          Select a dataset on the left to see its schema, relationships, and
+          play with sample queries.
+        </div>
+
+        <div id="ds-selected" hidden>
+          <header>
+            <h3 id="ds-title" style="margin: 0;">—</h3>
+            <span id="ds-badges" class="meta"></span>
+          </header>
+
+          <div class="ds-section">
+            <h4>Schema</h4>
+            <div id="ds-schema-body">…</div>
+          </div>
+
+          <div class="ds-section">
+            <h4>Relationships <small class="meta">— joinable via USING PLACE</small></h4>
+            <div id="ds-rels-body">…</div>
+          </div>
+
+          <div class="ds-section">
+            <h4>
+              Sample rows
+              <button id="ds-sample-refresh" class="secondary outline"
+                      style="float: right; padding: 0.15rem 0.6rem; font-size: 0.85em;">Refresh</button>
+            </h4>
+            <div id="ds-sample-body">click Refresh to run <code>SELECT * LIMIT 10</code></div>
+          </div>
+
+          <div class="ds-section">
+            <h4>Quick queries — sends to Playground</h4>
+            <div id="ds-quick" class="ds-quick"></div>
+          </div>
+
+          <details class="ds-section">
+            <summary style="cursor: pointer;"><strong>Full manifest JSON</strong></summary>
+            <pre id="ds-raw" class="scroll" style="margin-top: 0.5rem; padding: 0.5rem; background: #f8f9fa; font-size: 0.8em; max-height: 20rem;"></pre>
+          </details>
+        </div>
+      </article>
+    </div>
   </section>
 
   <!-- ================== PLAYGROUND (SQL IDE) ================== -->
