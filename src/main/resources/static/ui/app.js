@@ -526,23 +526,38 @@ async function runPlaygroundQuery() {
   const sql = getSql().trim();
   const timeoutMs = +$('#pg-timeout').value || 5000;
   const retries = +$('#pg-retries').value || 0;
+  const semantic = $('#pg-semantic').checked;
   if (!sql) return;
   $('#pg-result').hidden = false;
   $('#pg-meta').textContent = 'Running…';
   $('#pg-table-body').innerHTML = '';
   $('#pg-json').textContent = '';
+  // Reset the rewrite banner — populated below only when semantic:true
+  // returns a rewrittenSql distinct from the input.
+  $('#pg-rewrite').hidden = true;
+  $('#pg-rewrite-sql').textContent = '';
   const t0 = performance.now();
   try {
+    const reqBody = { sql, timeoutMs, retries };
+    if (semantic) reqBody.semantic = true;
     const body = await api('/mesh/queries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql, timeoutMs, retries }),
+      body: JSON.stringify(reqBody),
     });
     const dt = Math.round(performance.now() - t0);
-    const meta = `${body.rowCount} rows · ${dt}ms · attempts=${body.attempts}${body.timedOut ? ' · TIMED OUT' : ''}`;
+    const semanticTag = body.rewrittenSql ? ' · rewritten' : (semantic ? ' · semantic:pass-through' : '');
+    const meta = `${body.rowCount} rows · ${dt}ms · attempts=${body.attempts}${body.timedOut ? ' · TIMED OUT' : ''}${semanticTag}`;
     $('#pg-meta').textContent = meta;
     $('#pg-table-info').textContent = `${body.rowCount} rows · queryId ${body.queryId}`;
     $('#pg-json').textContent = fmtJson(body);
+    if (body.rewrittenSql) {
+      // Open by default the first time so users see it fire; they can
+      // collapse afterwards.
+      $('#pg-rewrite').hidden = false;
+      $('#pg-rewrite').open = true;
+      $('#pg-rewrite-sql').textContent = body.rewrittenSql;
+    }
     lastResult = body;
     tableSort = { col: null, dir: 1 };
     renderResultTable();

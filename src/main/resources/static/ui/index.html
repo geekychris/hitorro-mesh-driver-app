@@ -225,11 +225,24 @@
           <div class="row">
             <label>Timeout (ms) <input type="number" id="pg-timeout" value="5000" min="1"></label>
             <label>Retries <input type="number" id="pg-retries" value="0" min="0" max="5"></label>
+            <label title="When on, USING PLACE joins are rewritten by the datasets registry before dispatch. Requires hitorro-mesh-datasets on the driver's classpath.">
+              <input type="checkbox" id="pg-semantic" role="switch"> Semantic (USING PLACE)
+            </label>
             <button id="pg-run">▶ Run</button>
             <button id="pg-explain-btn" class="secondary">Explain</button>
             <button id="pg-save" class="secondary outline">💾 Save</button>
             <button id="pg-clear" class="secondary outline">Clear</button>
           </div>
+          <!-- Populated when a semantic:true request returned a rewrittenSql
+               distinct from the input. Purely informational; the query
+               already ran against this rewritten form. -->
+          <details id="pg-rewrite" hidden style="margin-top: 0.5rem;">
+            <summary style="cursor: pointer;">
+              <strong>Rewritten by semantic pass</strong>
+              <span class="meta">— click to expand</span>
+            </summary>
+            <pre id="pg-rewrite-sql" class="scroll" style="margin-top: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-left: 3px solid #2E86AB; font-size: 0.85em;"></pre>
+          </details>
         </article>
 
         <article id="pg-result" hidden>
