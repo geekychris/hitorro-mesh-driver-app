@@ -84,9 +84,75 @@
     <article>
       <header>
         <span>Registered tables <span id="table-count-inline" class="badge">?</span></span>
-        <small class="meta">Click a table to see its type + sample rows</small>
+        <div>
+          <button id="add-table-btn" class="secondary outline" style="width:auto;margin:0;">+ Distributed table</button>
+          <button id="add-broadcast-btn" class="secondary outline" style="width:auto;margin:0;">+ Broadcast</button>
+        </div>
       </header>
+      <p><small class="meta">Click a table name to see its type + sample rows.
+        Distributed tables show partition keys; broadcasts show as
+        <span class="badge accent">broadcast</span>.</small></p>
       <div id="table-list">…</div>
+    </article>
+
+    <!-- Add-distributed-table form -->
+    <article id="add-table-panel" hidden>
+      <header>
+        <span>Add distributed table (runtime registration)</span>
+        <button id="add-table-close" class="secondary outline" style="width:auto;margin:0;">Close</button>
+      </header>
+      <div class="cluster-status-callout warn">
+        <p class="title">Driver-side metadata only</p>
+        <p>Agents must already hold this table's data AND advertise
+        each partition's required capability. If they don't, queries
+        against this table will fail with "no live agent has capabilities…".
+        In-memory only — lost on driver restart; use YAML config for prod.</p>
+      </div>
+
+      <label>Name
+        <input type="text" id="new-table-name" placeholder="events" required>
+      </label>
+
+      <label>JVS type JSON
+        <textarea id="new-table-type" rows="6" placeholder='{"name": "events", "fields": [{"name": "doc_id", "type": "core_string"}, {"name": "action", "type": "core_string"}]}'></textarea>
+      </label>
+
+      <label>Partition keys (comma-separated)
+        <input type="text" id="new-table-partitions" placeholder="us, eu, apac">
+      </label>
+      <p><small>Auto-derives capabilities as
+        <code>[jvssql, partition:&lt;table&gt;:&lt;key&gt;]</code>. For custom
+        capabilities, use the API directly (see docs).</small></p>
+
+      <div class="row">
+        <button id="new-table-submit">Register table</button>
+        <span id="new-table-status" class="meta"></span>
+      </div>
+    </article>
+
+    <!-- Add-broadcast form -->
+    <article id="add-broadcast-panel" hidden>
+      <header>
+        <span>Add broadcast table (runtime registration)</span>
+        <button id="add-broadcast-close" class="secondary outline" style="width:auto;margin:0;">Close</button>
+      </header>
+      <div class="cluster-status-callout warn">
+        <p class="title">Name registration only</p>
+        <p>Registers the broadcast NAME with the driver's planner so
+        JOINs to it are allowed. Every agent must independently
+        pre-load the broadcast data via its own
+        <code>hitorro.mesh.agent.broadcast-tables</code> config —
+        the driver doesn't distribute the data.</p>
+      </div>
+
+      <label>Broadcast table name
+        <input type="text" id="new-broadcast-name" placeholder="langs" required>
+      </label>
+
+      <div class="row">
+        <button id="new-broadcast-submit">Register broadcast</button>
+        <span id="new-broadcast-status" class="meta"></span>
+      </div>
     </article>
 
     <article>

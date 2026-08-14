@@ -137,7 +137,7 @@ public class MeshRestController {
      * error.</p>
      */
     @DeleteMapping("/queries/{queryId}")
-    public java.util.Map<String, Object> cancel(@PathVariable String queryId) {
+    public java.util.Map<String, Object> cancel(@PathVariable("queryId") String queryId) {
         QueryDispatcher.QueryHandle h = activeQueries.remove(queryId);
         if (h == null) {
             throw new IllegalArgumentException("no active query with id: " + queryId);
@@ -388,11 +388,121 @@ public class MeshRestController {
 
     @GetMapping("/tables")
     public List<Map<String, Object>> tables() {
-        return driver.tables().all().stream()
-                .map(t -> Map.<String, Object>of(
-                        "name", t.name(),
-                        "partitions", t.partitions()))
-                .toList();
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (var t : driver.tables().all()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", t.name());
+            row.put("kind", "distributed");
+            row.put("partitions", t.partitions());
+            row.put("streaming", t.streamConfig() != null);
+            out.add(row);
+        }
+        for (String bname : driver.tables().broadcastNames()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", bname);
+            row.put("kind", "broadcast");
+            row.put("partitions", List.of());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /**
+     * Phase 7p — register a distributed table at runtime. Driver-side
+     * metadata only; agents must already hold the data and advertise the
+     * required capabilities. In-memory registration is lost on driver
+     * restart; production paths use YAML config.
+     *
+     * <p>Body: {@code {"name": "events", "typeJson": "{...}", "partitions":
+     * [{"key": "us", "requiredCapabilities": [...]}, ...]}}. If
+     * {@code requiredCapabilities} is omitted for a partition, the driver
+     * derives {@code [jvssql, partition:<name>:<key>]}.</p>
+     */
+    @PostMapping("/tables")
+    public Map<String, Object> registerTable(@RequestBody RegisterTableRequest req) throws Exception {
+        if (req.name == null || req.name.isBlank()) {
+            throw new IllegalArgumentException("table name is required");
+        }
+        if (req.typeJson == null || req.typeJson.isBlank()) {
+            throw new IllegalArgumentException("typeJson is required (full JVS type definition as a JSON string)");
+        }
+        if (req.partitions == null || req.partitions.isEmpty()) {
+            throw new IllegalArgumentException("at least one partition is required");
+        }
+        com.hitorro.jsontypesystem.Type type = new com.hitorro.jsontypesystem.Type();
+        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        List<DistributedTable.Partition> parts = new java.util.ArrayList<>();
+        for (RegisterPartitionRequest p : req.partitions) {
+            if (p.key == null || p.key.isBlank()) {
+                throw new IllegalArgumentException("partition key is required");
+            }
+            Set<String> caps = (p.requiredCapabilities == null || p.requiredCapabilities.isEmpty())
+                    ? Set.of("jvssql", "partition:" + req.name + ":" + p.key)
+                    : new java.util.HashSet<>(p.requiredCapabilities);
+            long rowCount = p.approxRowCount == null ? -1L : p.approxRowCount;
+            parts.add(new DistributedTable.Partition(p.key, caps, rowCount));
+        }
+        driver.tables().register(new SimpleRuntimeTable(req.name, type, parts));
+        log.info("runtime-registered distributed table: {} ({} partitions)", req.name, parts.size());
+        return Map.of("registered", req.name, "partitions", parts.size());
+    }
+
+    /**
+     * Phase 7p — deregister a distributed table. Silent no-op if the name
+     * isn't registered. Doesn't touch agent-side data.
+     */
+    @DeleteMapping("/tables/{name}")
+    public Map<String, Object> unregisterTable(@PathVariable("name") String name) {
+        boolean removed = driver.tables().remove(name);
+        if (!removed) throw new IllegalArgumentException("no distributed table registered as: " + name);
+        log.info("runtime-unregistered distributed table: {}", name);
+        return Map.of("removed", name);
+    }
+
+    /**
+     * Phase 7p — register a broadcast table NAME. Every agent must
+     * pre-load the actual data via its own broadcast-tables config;
+     * this just tells the driver's planner to allow JOINs to it.
+     */
+    @PostMapping("/broadcast-tables")
+    public Map<String, Object> registerBroadcast(@RequestBody RegisterBroadcastRequest req) {
+        if (req.name == null || req.name.isBlank()) {
+            throw new IllegalArgumentException("name is required");
+        }
+        driver.tables().registerBroadcast(req.name);
+        log.info("runtime-registered broadcast table name: {}", req.name);
+        return Map.of("registered", req.name);
+    }
+
+    @DeleteMapping("/broadcast-tables/{name}")
+    public Map<String, Object> unregisterBroadcast(@PathVariable("name") String name) {
+        boolean removed = driver.tables().unregisterBroadcast(name);
+        if (!removed) throw new IllegalArgumentException("no broadcast table registered as: " + name);
+        log.info("runtime-unregistered broadcast table: {}", name);
+        return Map.of("removed", name);
+    }
+
+    /** Minimal runtime DistributedTable implementation — no streaming, batch only. */
+    private record SimpleRuntimeTable(
+            String name,
+            com.hitorro.jsontypesystem.Type type,
+            List<DistributedTable.Partition> partitions
+    ) implements DistributedTable {}
+
+    public static class RegisterTableRequest {
+        public String name;
+        public String typeJson;
+        public List<RegisterPartitionRequest> partitions;
+    }
+
+    public static class RegisterPartitionRequest {
+        public String key;
+        public List<String> requiredCapabilities;
+        public Long approxRowCount;
+    }
+
+    public static class RegisterBroadcastRequest {
+        public String name;
     }
 
     /**

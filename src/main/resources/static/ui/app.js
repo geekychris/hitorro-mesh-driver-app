@@ -257,18 +257,50 @@ function renderAgents(agents, cluster) {
 function renderTables(tables) {
   $('#table-count-inline').textContent = tables.length;
   if (!tables.length) {
-    $('#table-list').innerHTML = '<p><small>No tables registered.</small></p>';
+    $('#table-list').innerHTML = '<p><small>No tables registered. Use the buttons above to add one.</small></p>';
     return;
   }
   $('#table-list').innerHTML = '<div class="entity-list"><ul>' + tables.map(t => {
-    const parts = (t.partitions || []).map(p => `<span class="cap">${esc(p.key)}</span>`).join('');
+    const isBroadcast = t.kind === 'broadcast';
+    const parts = isBroadcast
+      ? '<span class="badge accent">broadcast</span>'
+      : ((t.partitions || []).map(p => `<span class="cap">${esc(p.key)}</span>`).join('') || '<small>(no partitions)</small>');
+    const streamBadge = t.streaming ? '<span class="badge accent">streaming</span>' : '';
     return `<li>
-       <span class="name clickable-name" data-table="${esc(t.name)}">${esc(t.name)}</span>
-       <span>${parts || '<small>(broadcast — no partitions)</small>'}</span>
+       <span>
+         <span class="name clickable-name" data-table="${esc(t.name)}">${esc(t.name)}</span>
+         ${streamBadge}
+       </span>
+       <span>
+         ${parts}
+         <button class="contrast outline delete-table"
+                 data-table="${esc(t.name)}"
+                 data-kind="${esc(t.kind || 'distributed')}"
+                 style="width:auto;margin:0 0 0 0.5rem;font-size:0.75rem;padding:0.2rem 0.5rem;"
+                 title="Deregister">✕</button>
+       </span>
      </li>`;
   }).join('') + '</ul></div>';
   $$('#table-list .clickable-name').forEach(el => {
     el.addEventListener('click', () => showSchema(el.dataset.table, tables));
+  });
+  $$('#table-list .delete-table').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.table;
+      const kind = btn.dataset.kind;
+      if (!confirm(`Deregister ${kind} table "${name}"? (data on agents is not touched)`)) return;
+      try {
+        const path = kind === 'broadcast'
+          ? '/mesh/broadcast-tables/' + encodeURIComponent(name)
+          : '/mesh/tables/' + encodeURIComponent(name);
+        await api(path, { method: 'DELETE' });
+        refreshCluster();
+        refreshTopBar();
+      } catch (err) {
+        alert('Failed: ' + (err.body?.message || err.message));
+      }
+    });
   });
 }
 
@@ -747,6 +779,70 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#stream-stop').addEventListener('click', cancelStream);
   $('#active-refresh').addEventListener('click', refreshActive);
   $('#schema-close').addEventListener('click', () => { $('#schema-panel').hidden = true; });
+
+  // Phase 7p — runtime table/broadcast registration forms.
+  $('#add-table-btn').addEventListener('click', () => {
+    $('#add-table-panel').hidden = !$('#add-table-panel').hidden;
+    $('#add-broadcast-panel').hidden = true;
+    if (!$('#add-table-panel').hidden) $('#add-table-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  $('#add-broadcast-btn').addEventListener('click', () => {
+    $('#add-broadcast-panel').hidden = !$('#add-broadcast-panel').hidden;
+    $('#add-table-panel').hidden = true;
+    if (!$('#add-broadcast-panel').hidden) $('#add-broadcast-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  $('#add-table-close').addEventListener('click', () => { $('#add-table-panel').hidden = true; });
+  $('#add-broadcast-close').addEventListener('click', () => { $('#add-broadcast-panel').hidden = true; });
+
+  $('#new-table-submit').addEventListener('click', async () => {
+    const name = $('#new-table-name').value.trim();
+    const typeJson = $('#new-table-type').value.trim();
+    const partsStr = $('#new-table-partitions').value.trim();
+    const status = $('#new-table-status');
+    if (!name || !typeJson || !partsStr) {
+      status.textContent = 'error: name, typeJson, and partitions all required';
+      return;
+    }
+    const partitions = partsStr.split(',').map(k => ({ key: k.trim() })).filter(p => p.key);
+    status.textContent = 'registering…';
+    try {
+      const body = await api('/mesh/tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, typeJson, partitions }),
+      });
+      status.textContent = `registered ${body.registered} (${body.partitions} partitions)`;
+      $('#new-table-name').value = '';
+      $('#new-table-type').value = '';
+      $('#new-table-partitions').value = '';
+      $('#add-table-panel').hidden = true;
+      refreshCluster();
+      refreshTopBar();
+    } catch (e) {
+      status.textContent = 'error: ' + (e.body?.message || e.message);
+    }
+  });
+
+  $('#new-broadcast-submit').addEventListener('click', async () => {
+    const name = $('#new-broadcast-name').value.trim();
+    const status = $('#new-broadcast-status');
+    if (!name) { status.textContent = 'error: name required'; return; }
+    status.textContent = 'registering…';
+    try {
+      const body = await api('/mesh/broadcast-tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      status.textContent = 'registered ' + body.registered;
+      $('#new-broadcast-name').value = '';
+      $('#add-broadcast-panel').hidden = true;
+      refreshCluster();
+      refreshTopBar();
+    } catch (e) {
+      status.textContent = 'error: ' + (e.body?.message || e.message);
+    }
+  });
 
   renderHistory();
   refreshTopBar();
