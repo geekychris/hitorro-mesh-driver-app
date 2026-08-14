@@ -1,0 +1,206 @@
+/* Hitorro Mesh UI — tiny overrides on top of Pico.css */
+
+:root {
+  --primary-mesh: #2E86AB;
+  --accent-mesh: #F18F01;
+  --danger: #C0392B;
+  --success: #27AE60;
+  --muted: #666;
+}
+
+body { font-size: 15px; }
+main { padding-top: 1rem; }
+nav { padding: 0.5rem 1rem; border-bottom: 1px solid var(--pico-muted-border-color); }
+nav strong { color: var(--primary-mesh); }
+nav small { color: var(--muted); font-weight: normal; margin-left: 0.5rem; }
+footer { padding: 1rem; text-align: center; color: var(--muted); border-top: 1px solid var(--pico-muted-border-color); margin-top: 3rem; }
+footer a { color: var(--muted); }
+
+/* Health dot + badges */
+.dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #999;
+  vertical-align: middle;
+}
+.dot.up { background: var(--success); }
+.dot.down { background: var(--danger); }
+.dot.degraded { background: var(--accent-mesh); }
+
+.badge {
+  display: inline-block;
+  background: var(--pico-muted-border-color);
+  color: var(--pico-color);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.badge.primary { background: var(--primary-mesh); color: white; }
+.badge.accent { background: var(--accent-mesh); color: white; }
+.badge.danger { background: var(--danger); color: white; }
+
+.meta { color: var(--muted); font-size: 0.85rem; font-weight: normal; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 2px solid var(--pico-muted-border-color);
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+.tabs button {
+  background: transparent;
+  color: var(--pico-color);
+  border: none;
+  padding: 0.6rem 1rem;
+  margin: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  width: auto;
+}
+.tabs button:hover {
+  background: var(--pico-muted-border-color);
+}
+.tabs button.active {
+  color: var(--primary-mesh);
+  border-bottom-color: var(--primary-mesh);
+  background: transparent;
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.sub-tabs { border-bottom-width: 1px; margin-bottom: 0.5rem; }
+.sub-tabs button { font-size: 0.9rem; padding: 0.4rem 0.75rem; }
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* Layout helpers */
+.row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.row label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+}
+.row input[type="number"] {
+  width: 8rem;
+  margin: 0;
+}
+.row button { margin: 0; width: auto; }
+
+article header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Result rendering */
+.scroll {
+  max-height: 500px;
+  overflow: auto;
+  font-size: 0.85rem;
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin: 0;
+}
+
+table.result {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+table.result th, table.result td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+table.result th {
+  background: var(--pico-card-background-color);
+  font-weight: 600;
+  color: var(--primary-mesh);
+  position: sticky;
+  top: 0;
+}
+table.result tbody tr:hover {
+  background: var(--pico-muted-border-color);
+}
+
+.stream-table {
+  max-height: 500px;
+  overflow: auto;
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.8rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+.stream-row { padding: 0.15rem 0; border-bottom: 1px dashed var(--pico-muted-border-color); }
+.stream-row.event-opened { color: var(--primary-mesh); }
+.stream-row.event-complete { color: var(--success); font-weight: 600; }
+.stream-row.event-error { color: var(--danger); }
+
+/* Cluster panels */
+.entity-list ul { list-style: none; padding: 0; margin: 0; }
+.entity-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.entity-list li:last-child { border-bottom: none; }
+.entity-list .name { font-weight: 600; color: var(--primary-mesh); }
+.entity-list .cap {
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.75rem;
+  background: var(--pico-muted-border-color);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  margin-right: 0.25rem;
+}
+
+/* History */
+#pg-history .history-item {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+#pg-history .history-item:hover { background: var(--pico-muted-border-color); }
+#pg-history .history-sql {
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.85rem;
+  color: var(--pico-color);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#pg-history .history-meta { color: var(--muted); font-size: 0.8rem; }

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hitorro Mesh — Admin</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="container">
+  <ul>
+    <li><strong>Hitorro Mesh</strong> <small id="version-badge">v3.0.1</small></li>
+  </ul>
+  <ul>
+    <li><span id="health-dot" class="dot"></span> <span id="health-text">checking…</span></li>
+    <li><span id="agent-count" class="badge">? agents</span></li>
+    <li><span id="tables-count" class="badge">? tables</span></li>
+  </ul>
+</nav>
+
+<main class="container">
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-target="cluster" class="active">Cluster</button>
+    <button role="tab" data-target="playground">Playground</button>
+    <button role="tab" data-target="stream">Streaming</button>
+    <button role="tab" data-target="explain">Explain</button>
+    <button role="tab" data-target="active">Active queries</button>
+    <button role="tab" data-target="metrics">Metrics</button>
+  </div>
+
+  <!-- ================== CLUSTER ================== -->
+  <section id="cluster" class="tab-panel active">
+    <div class="grid">
+      <article>
+        <header>Health</header>
+        <pre id="health-json" class="scroll">…</pre>
+      </article>
+      <article>
+        <header>Live agents <span id="cluster-agent-count" class="badge">?</span></header>
+        <div id="agent-list">…</div>
+      </article>
+    </div>
+
+    <article>
+      <header>Registered tables <span id="table-count-inline" class="badge">?</span></header>
+      <div id="table-list">…</div>
+    </article>
+
+    <article>
+      <header>Cluster (declared vs live)</header>
+      <pre id="cluster-json" class="scroll">…</pre>
+    </article>
+  </section>
+
+  <!-- ================== PLAYGROUND ================== -->
+  <section id="playground" class="tab-panel">
+    <article>
+      <header>SQL query</header>
+      <textarea id="pg-sql" rows="4" placeholder="SELECT lang, COUNT(*) FROM docs GROUP BY lang">SELECT lang, COUNT(*) AS n FROM docs GROUP BY lang</textarea>
+      <div class="row">
+        <label>Timeout (ms) <input type="number" id="pg-timeout" value="5000" min="1"></label>
+        <label>Retries <input type="number" id="pg-retries" value="0" min="0" max="5"></label>
+        <button id="pg-run">Run query</button>
+        <button id="pg-explain-btn" class="secondary">Explain</button>
+      </div>
+    </article>
+
+    <article id="pg-result" hidden>
+      <header>
+        <span>Result</span>
+        <span id="pg-meta" class="meta"></span>
+      </header>
+      <div class="tabs sub-tabs">
+        <button data-view="pg-table" class="active">Table</button>
+        <button data-view="pg-json">JSON</button>
+      </div>
+      <div id="pg-table" class="view active"></div>
+      <pre id="pg-json" class="view scroll"></pre>
+    </article>
+
+    <article>
+      <header>Recent (this browser)</header>
+      <div id="pg-history">
+        <p><small>No queries yet.</small></p>
+      </div>
+    </article>
+  </section>
+
+  <!-- ================== STREAMING ================== -->
+  <section id="stream" class="tab-panel">
+    <article>
+      <header>Streaming query (SSE)</header>
+      <textarea id="stream-sql" rows="4">SELECT id FROM docs WHERE lang = 'en'</textarea>
+      <div class="row">
+        <label>Timeout (ms) <input type="number" id="stream-timeout" value="60000" min="1000"></label>
+        <button id="stream-run">Start streaming</button>
+        <button id="stream-stop" class="contrast" disabled>Cancel</button>
+      </div>
+      <p><small>Uses <code>GET /mesh/queries/stream</code>. Rows arrive
+        as SSE events. Cancel sends <code>DELETE /mesh/queries/{queryId}</code>.</small></p>
+    </article>
+
+    <article id="stream-panel" hidden>
+      <header>
+        <span>Stream</span>
+        <span id="stream-meta" class="meta"></span>
+      </header>
+      <div class="row">
+        <span>Rows: <strong id="stream-row-count">0</strong></span>
+        <span>Status: <strong id="stream-status">idle</strong></span>
+      </div>
+      <div id="stream-rows" class="stream-table"></div>
+    </article>
+  </section>
+
+  <!-- ================== EXPLAIN ================== -->
+  <section id="explain" class="tab-panel">
+    <article>
+      <header>Plan explain</header>
+      <textarea id="ex-sql" rows="4">SELECT d.lang, COUNT(*) FROM docs d JOIN events e ON d.id = e.doc_id GROUP BY d.lang</textarea>
+      <button id="ex-run">Explain</button>
+    </article>
+
+    <article id="ex-result" hidden>
+      <header>
+        <span>Plan</span>
+        <span id="ex-type" class="badge"></span>
+      </header>
+      <div class="grid">
+        <article><header>Overview</header><div id="ex-overview"></div></article>
+        <article><header>Partitions</header><div id="ex-partitions"></div></article>
+      </div>
+      <article><header>Full plan JSON</header><pre id="ex-json" class="scroll"></pre></article>
+    </article>
+  </section>
+
+  <!-- ================== ACTIVE ================== -->
+  <section id="active" class="tab-panel">
+    <article>
+      <header>
+        <span>In-flight queries</span>
+        <button id="active-refresh" class="secondary outline">Refresh</button>
+      </header>
+      <div id="active-list">
+        <p><small>Loading…</small></p>
+      </div>
+    </article>
+    <p><small>Auto-refreshes every 3 seconds when this tab is active.</small></p>
+  </section>
+
+  <!-- ================== METRICS ================== -->
+  <section id="metrics" class="tab-panel">
+    <article>
+      <header>Prometheus scrape</header>
+      <p>Metrics live at <code><a href="/actuator/prometheus" target="_blank">/actuator/prometheus</a></code>.
+      Wire this into your existing Prometheus + Grafana stack — a
+      pre-built dashboard is planned but not shipped yet.</p>
+      <div class="grid">
+        <article>
+          <header>Meter families</header>
+          <ul>
+            <li><code>mesh_queries_total{outcome}</code></li>
+            <li><code>mesh_query_duration_seconds</code></li>
+            <li><code>mesh_rows_returned_total</code></li>
+            <li><code>mesh_agents_live</code>, <code>mesh_tables_registered</code></li>
+            <li><code>mesh_backpressure_drops_total</code></li>
+            <li><code>mesh_agent_*_total{agent}</code> (per-agent)</li>
+          </ul>
+        </article>
+        <article>
+          <header>Live snapshot</header>
+          <pre id="metrics-snapshot" class="scroll">Loading…</pre>
+        </article>
+      </div>
+    </article>
+  </section>
+
+</main>
+
+<footer class="container">
+  <small>
+    <a href="https://github.com/geekychris/hitorro-mesh-core" target="_blank">Source</a> ·
+    <a href="https://github.com/geekychris/hitorro-mesh-core/blob/main/GETTING_STARTED.md" target="_blank">Getting Started</a> ·
+    <a href="https://github.com/geekychris/hitorro-mesh-core/blob/main/docs/user-guide/mesh-user-guide.adoc" target="_blank">User Guide</a>
+  </small>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
