@@ -74,12 +74,18 @@ public class MeshRestController {
     public QueryResponse submit(@RequestBody QueryRequest req) throws Exception {
         long timeout = req.timeoutMs > 0 ? req.timeoutMs : 5_000;
         long tStart = System.nanoTime();
-        try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(req.sql)) {
+        // Phase 7b: submit with a query-level deadline. On expiry, the driver
+        // publishes CancelMessage (interrupting all in-flight agent tasks for
+        // this query) and closes the handle. Collect below sees the
+        // synthesized EOS and returns whatever rows arrived pre-deadline —
+        // caller can inspect the {@code timedOut} field on the response.
+        try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
+                req.sql, java.time.Duration.ofMillis(timeout))) {
             List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
             metrics.submitTimerOk().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
             metrics.queriesOk().increment();
             metrics.rowsReturned().increment(rows.size());
-            return new QueryResponse(h.queryId(), h.assignedAgents(), rows.size(), rows);
+            return new QueryResponse(h.queryId(), h.assignedAgents(), rows.size(), rows, h.timedOut());
         } catch (RuntimeException e) {
             metrics.submitTimerErr().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
             metrics.queriesErr().increment();
@@ -246,7 +252,13 @@ public class MeshRestController {
 
     public record QueryRequest(String sql, long timeoutMs) {}
 
-    public record QueryResponse(String queryId, List<String> assignedAgents, int rowCount, List<JsonNode> rows) {}
+    public record QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
+                                List<JsonNode> rows, boolean timedOut) {
+        /** Back-compat overload — omit timedOut, defaults to false. */
+        public QueryResponse(String queryId, List<String> assignedAgents, int rowCount, List<JsonNode> rows) {
+            this(queryId, assignedAgents, rowCount, rows, false);
+        }
+    }
 
     public DistributedTableRegistry registry() { return driver.tables(); }
 
