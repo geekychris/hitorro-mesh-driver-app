@@ -82,29 +82,47 @@ public class MeshRestController {
     @PostMapping("/queries")
     public QueryResponse submit(@RequestBody QueryRequest req) throws Exception {
         long timeout = req.timeoutMs > 0 ? req.timeoutMs : 5_000;
+        int retries = Math.max(0, req.retries);
         long tStart = System.nanoTime();
-        // Phase 7b: submit with a query-level deadline. On expiry, the driver
-        // publishes CancelMessage (interrupting all in-flight agent tasks for
-        // this query) and closes the handle. Collect below sees the
-        // synthesized EOS and returns whatever rows arrived pre-deadline —
-        // caller can inspect the {@code timedOut} field on the response.
-        try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
-                req.sql, java.time.Duration.ofMillis(timeout))) {
-            activeQueries.put(h.queryId(), h);
-            try {
-                List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
-                metrics.submitTimerOk().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
-                metrics.queriesOk().increment();
-                metrics.rowsReturned().increment(rows.size());
-                return new QueryResponse(h.queryId(), h.assignedAgents(), rows.size(), rows, h.timedOut());
-            } finally {
-                activeQueries.remove(h.queryId());
+        // Phase 7g — retry the whole query on AgentTaskException up to
+        // `retries` times with exponential backoff (100ms, 200ms, 400ms, ...).
+        // Retries only fire for AgentTaskException (a genuine agent failure);
+        // timeouts (QueryTimeoutException) and planner errors (IllegalArgument)
+        // still fail fast — retrying wouldn't help.
+        RuntimeException lastError = null;
+        int totalAttempts = 1 + retries;
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
+                    req.sql, java.time.Duration.ofMillis(timeout))) {
+                activeQueries.put(h.queryId(), h);
+                try {
+                    List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
+                    metrics.submitTimerOk().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
+                    metrics.queriesOk().increment();
+                    metrics.rowsReturned().increment(rows.size());
+                    return new QueryResponse(h.queryId(), h.assignedAgents(),
+                            rows.size(), rows, h.timedOut(), attempt);
+                } finally {
+                    activeQueries.remove(h.queryId());
+                }
+            } catch (com.hitorro.mesh.AgentTaskException e) {
+                lastError = e;
+                if (attempt < totalAttempts) {
+                    long backoffMs = 100L * (1L << (attempt - 1));   // 100, 200, 400, ...
+                    log.info("query attempt {}/{} failed ({}), retrying in {}ms",
+                            attempt, totalAttempts, e.getMessage(), backoffMs);
+                    try { Thread.sleep(backoffMs); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                }
+            } catch (RuntimeException e) {
+                metrics.submitTimerErr().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
+                metrics.queriesErr().increment();
+                throw e;
             }
-        } catch (RuntimeException e) {
-            metrics.submitTimerErr().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
-            metrics.queriesErr().increment();
-            throw e;
         }
+        metrics.submitTimerErr().record(System.nanoTime() - tStart, TimeUnit.NANOSECONDS);
+        metrics.queriesErr().increment();
+        throw lastError;
     }
 
     /**
@@ -305,13 +323,30 @@ public class MeshRestController {
                 .toList();
     }
 
-    public record QueryRequest(String sql, long timeoutMs) {}
+    /**
+     * @param sql       the SQL to execute (required)
+     * @param timeoutMs per-query deadline; default 5000 (phase 7b)
+     * @param retries   phase 7g — number of RETRY ATTEMPTS on transient
+     *                  agent failure (AgentTaskException). Default 0 means
+     *                  no retry (fail-fast). 1 = one retry (2 total attempts).
+     *                  Applies to whole-query resubmit — the entire query
+     *                  is redispatched to a fresh agent pool.
+     */
+    public record QueryRequest(String sql, long timeoutMs, int retries) {
+        /** Back-compat 2-arg constructor — retries defaults to 0. */
+        public QueryRequest(String sql, long timeoutMs) { this(sql, timeoutMs, 0); }
+    }
 
     public record QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
-                                List<JsonNode> rows, boolean timedOut) {
-        /** Back-compat overload — omit timedOut, defaults to false. */
+                                List<JsonNode> rows, boolean timedOut, int attempts) {
+        /** Back-compat overload — omit timedOut + attempts. */
         public QueryResponse(String queryId, List<String> assignedAgents, int rowCount, List<JsonNode> rows) {
-            this(queryId, assignedAgents, rowCount, rows, false);
+            this(queryId, assignedAgents, rowCount, rows, false, 1);
+        }
+        /** Back-compat overload — omit attempts (defaults to 1). */
+        public QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
+                             List<JsonNode> rows, boolean timedOut) {
+            this(queryId, assignedAgents, rowCount, rows, timedOut, 1);
         }
     }
 
