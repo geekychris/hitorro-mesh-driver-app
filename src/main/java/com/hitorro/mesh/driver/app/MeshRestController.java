@@ -605,13 +605,24 @@ public class MeshRestController {
     }
 
     /**
-     * Full manifest for one dataset. Serialised straight from the record —
-     * fields, license, source, identifiers, relationships. The UI's
-     * Datasets tab reads this to render schema tables, relationship lists,
-     * and quick-query buttons per field role.
+     * Full manifest for one dataset PLUS live install-time stats when
+     * they're on disk. Manifest fields (schema, license, source,
+     * relationships) come straight from the classpath / installed
+     * manifest.yaml. On top of that, the response layers an
+     * {@code installed} block read from
+     * {@code $HITORRO_DATASETS_HOME/<id>/installed.json} — the file the
+     * install scripts write via {@code common.sh}'s {@code finalize_ndjson}.
+     *
+     * <p>The layered block carries the actual row count, on-disk size,
+     * and install timestamp — self-syncing metadata that beats the
+     * hand-maintained {@code metadata.stats} in the shipped manifest
+     * (which is a curated baseline that drifts as vendors refresh their
+     * data). UI reads {@code installed.rowCount} in preference when
+     * present, falling back to {@code metadata.stats.rowCount} for
+     * datasets that haven't been installed yet.</p>
      */
     @GetMapping("/datasets/{id}")
-    public Manifest getDataset(@PathVariable("id") String id) {
+    public Map<String, Object> getDataset(@PathVariable("id") String id) throws java.io.IOException {
         if (datasetRegistry == null) {
             throw new IllegalArgumentException(
                     "datasets module not on classpath — no manifests available");
@@ -624,7 +635,29 @@ public class MeshRestController {
         if (m == null) {
             throw new IllegalArgumentException("no dataset registered under id: " + id);
         }
-        return m;
+
+        com.fasterxml.jackson.databind.ObjectMapper json =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> out = json.convertValue(m, Map.class);
+
+        // Layer live install stats when the file exists. Robust to a
+        // stale/corrupt file — we just skip on any error and let the
+        // manifest's curated stats stand alone.
+        java.nio.file.Path installedJson =
+                com.hitorro.mesh.datasets.registry.DatasetRegistry.installedHome()
+                        .resolve(m.id())
+                        .resolve("installed.json");
+        if (java.nio.file.Files.isRegularFile(installedJson)) {
+            try {
+                Map<?, ?> installed = json.readValue(installedJson.toFile(), Map.class);
+                out.put("installed", installed);
+            } catch (java.io.IOException e) {
+                log.warn("dataset {}: could not read {} ({}) — returning manifest only",
+                        m.id(), installedJson, e.getMessage());
+            }
+        }
+        return out;
     }
 
     /**

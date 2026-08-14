@@ -529,10 +529,23 @@ function renderDatasetMetadata(manifest) {
   if (!md) return;
 
   const stats = md.stats || {};
-  const rowsLabel = stats.rowCount != null ? Number(stats.rowCount).toLocaleString() : '—';
-  const sizeLabel = stats.sizeBytes != null ? humanBytes(stats.sizeBytes) : '—';
+  // Prefer live install-time stats over the hand-maintained manifest
+  // numbers whenever an installed.json exists on the driver — those
+  // numbers refresh every time the install script runs and never drift.
+  // Falls back to the manifest's curated baseline when nothing is
+  // installed yet (fresh clone, dataset not scoped in).
+  const installed = manifest.installed || {};
+  const liveRows = installed.rowCount != null;
+  const liveSize = installed.sizeBytes != null;
+  const rowsLabel = liveRows
+      ? Number(installed.rowCount).toLocaleString()
+      : (stats.rowCount != null ? Number(stats.rowCount).toLocaleString() : '—');
+  const sizeLabel = liveSize
+      ? humanBytes(installed.sizeBytes)
+      : (stats.sizeBytes != null ? humanBytes(stats.sizeBytes) : '—');
   const cadenceLabel = stats.refreshCadence || '—';
   const coverageLabel = stats.coverage || '';
+  const installedAtLabel = installed.installedAt ? relativeTime(installed.installedAt) : '';
 
   const useCasesHtml = (md.useCases || []).length === 0 ? '' : `
     <div class="ds-about-block">
@@ -552,11 +565,15 @@ function renderDatasetMetadata(manifest) {
   const about = document.createElement('div');
   about.id = 'ds-about';
   about.className = 'ds-about ds-section';
+  // Small "· live" badge next to the number when it came from installed.json
+  // rather than the manifest's curated baseline. Users learn to trust the
+  // number more when they see it's tracking reality.
+  const liveBadge = '<span class="ds-live-badge" title="live from installed.json">live</span>';
   about.innerHTML = `
-    <h4>About this dataset</h4>
+    <h4>About this dataset ${installedAtLabel ? `<small class="meta">— ${esc(installedAtLabel)}</small>` : ''}</h4>
     <div class="ds-stats-grid">
-      <div><span class="ds-stat-num">${rowsLabel}</span><span class="ds-stat-label">rows</span></div>
-      <div><span class="ds-stat-num">${sizeLabel}</span><span class="ds-stat-label">size</span></div>
+      <div><span class="ds-stat-num">${rowsLabel}${liveRows ? ' ' + liveBadge : ''}</span><span class="ds-stat-label">rows</span></div>
+      <div><span class="ds-stat-num">${sizeLabel}${liveSize ? ' ' + liveBadge : ''}</span><span class="ds-stat-label">size</span></div>
       <div><span class="ds-stat-num">${esc(cadenceLabel)}</span><span class="ds-stat-label">refresh</span></div>
       ${coverageLabel ? `<div style="grid-column: 1 / -1;"><span class="ds-stat-label">coverage:</span> ${esc(coverageLabel)}</div>` : ''}
     </div>
@@ -575,6 +592,24 @@ function humanBytes(n) {
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
   if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
   return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+}
+
+/**
+ * "installed 3 days ago" style label from an ISO-8601 UTC timestamp.
+ * Deliberately coarse — no minutes-past-the-hour precision. Reader
+ * cares about "recent" vs "stale", not to-the-second freshness.
+ */
+function relativeTime(isoStr) {
+  const t = new Date(isoStr).getTime();
+  if (isNaN(t)) return '';
+  const ageMs = Date.now() - t;
+  const min = 60 * 1000, hr = 60 * min, day = 24 * hr;
+  if (ageMs < min)      return 'installed just now';
+  if (ageMs < hr)       return `installed ${Math.round(ageMs / min)}m ago`;
+  if (ageMs < day)      return `installed ${Math.round(ageMs / hr)}h ago`;
+  if (ageMs < 30 * day) return `installed ${Math.round(ageMs / day)}d ago`;
+  const months = Math.round(ageMs / (30 * day));
+  return `installed ${months} month${months === 1 ? '' : 's'} ago`;
 }
 
 function buildQuickQueries(tableName, manifest, rels) {
