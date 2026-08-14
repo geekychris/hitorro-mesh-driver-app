@@ -66,6 +66,23 @@ const SNIPPETS = [
     sql: `SELECT id FROM docs WHERE lang IN (SELECT code FROM langs)` },
 ];
 
+let cmEditor = null;
+const getSql = () => cmEditor ? cmEditor.getValue() : $('#pg-sql').value;
+const setSql = (s) => { if (cmEditor) cmEditor.setValue(s); else $('#pg-sql').value = s; };
+const focusEditor = () => { if (cmEditor) cmEditor.focus(); else $('#pg-sql').focus(); };
+const insertAtCursor = (s) => {
+  if (cmEditor) {
+    cmEditor.replaceSelection(s, 'end');
+    cmEditor.focus();
+  } else {
+    const el = $('#pg-sql');
+    const p = el.selectionStart;
+    el.value = el.value.slice(0, p) + s + el.value.slice(p);
+    el.selectionStart = el.selectionEnd = p + s.length;
+    el.focus();
+  }
+};
+
 function renderSnippets() {
   const byCat = {};
   SNIPPETS.forEach(s => { (byCat[s.cat] = byCat[s.cat] || []).push(s); });
@@ -82,12 +99,138 @@ function renderSnippets() {
       const cat = el.dataset.cat;
       const idx = +el.dataset.idx;
       const s = byCat[cat][idx];
-      $('#pg-sql').value = s.sql;
+      setSql(s.sql);
       if (s.name === 'Force timeout') $('#pg-timeout').value = '1';
       else $('#pg-timeout').value = '5000';
-      $('#pg-sql').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      focusEditor();
     });
   });
+}
+
+// ================================================================ SCHEMA TREE
+async function refreshSchemaTree() {
+  const container = $('#schema-tree');
+  container.innerHTML = '<p><small>Loading…</small></p>';
+  try {
+    const tables = await api('/mesh/tables');
+    if (!tables.length) {
+      container.innerHTML = '<p><small>No tables registered.</small></p>';
+      return;
+    }
+    container.innerHTML = '<div class="schema-tree">' + tables.map((t, i) =>
+      `<div class="schema-table" data-table="${esc(t.name)}" data-idx="${i}">
+         <div class="schema-table-head" data-toggle="${esc(t.name)}">
+           <span class="arrow">▶</span>
+           <span class="schema-table-name" data-insert-name="${esc(t.name)}">${esc(t.name)}</span>
+           <span class="schema-badge ${t.kind}">${esc(t.kind)}</span>
+           ${t.streaming ? '<span class="schema-badge streaming">stream</span>' : ''}
+         </div>
+         <div class="schema-cols" id="cols-${esc(t.name)}">
+           <div class="schema-col meta"><small>click to expand</small></div>
+         </div>
+       </div>`).join('') + '</div>';
+
+    // Toggle expand + lazy-load columns via SELECT * FROM x LIMIT 1
+    $$('#schema-tree .schema-table-head').forEach(head => {
+      head.addEventListener('click', async (e) => {
+        // If they clicked the name specifically, insert it into the editor
+        // (single click on the name), not just toggle. Detect via the name span.
+        if (e.target.dataset.insertName) {
+          e.stopPropagation();
+          insertAtCursor(e.target.dataset.insertName);
+          return;
+        }
+        const name = head.dataset.toggle;
+        head.classList.toggle('open');
+        const colsDiv = $('#cols-' + CSS.escape(name));
+        if (head.classList.contains('open') && colsDiv.dataset.loaded !== 'true') {
+          colsDiv.innerHTML = '<p><small class="meta">Loading columns…</small></p>';
+          try {
+            const one = await api('/mesh/queries', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sql: `SELECT * FROM ${name} LIMIT 1`, timeoutMs: 5000 }),
+            });
+            if (one.rows.length) {
+              const first = one.rows[0];
+              colsDiv.innerHTML = Object.keys(first).map(k => {
+                const v = first[k];
+                const t = v === null ? 'null' : typeof v === 'number' ? (Number.isInteger(v) ? 'long' : 'double') : typeof v === 'boolean' ? 'bool' : typeof v === 'object' ? 'json' : 'string';
+                return `<div class="schema-col" data-insert-col="${esc(k)}">
+                  <span class="col-name">${esc(k)}</span>
+                  <span class="col-type">${esc(t)}</span>
+                </div>`;
+              }).join('');
+              $$('#cols-' + CSS.escape(name) + ' .schema-col').forEach(c => {
+                c.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  insertAtCursor(c.dataset.insertCol);
+                });
+              });
+              colsDiv.dataset.loaded = 'true';
+            } else {
+              colsDiv.innerHTML = '<p><small class="meta">(no rows to infer columns from)</small></p>';
+            }
+          } catch (err) {
+            colsDiv.innerHTML = `<p><small style="color:var(--danger)">Error: ${esc(err.body?.message || err.message)}</small></p>`;
+          }
+        }
+      });
+    });
+  } catch (e) {
+    container.innerHTML = `<p><small style="color:var(--danger)">Error loading schema: ${esc(e.message)}</small></p>`;
+  }
+}
+
+// ================================================================ SAVED QUERIES
+const SAVED_KEY = 'mesh-ui-saved';
+const savedLoad = () => JSON.parse(localStorage.getItem(SAVED_KEY) || '{}');
+const savedSave = (m) => localStorage.setItem(SAVED_KEY, JSON.stringify(m));
+
+function renderSavedList() {
+  const m = savedLoad();
+  const names = Object.keys(m).sort();
+  if (!names.length) {
+    $('#saved-list').innerHTML = '<p><small>No saved queries yet. Use the 💾 Save button on the editor.</small></p>';
+    return;
+  }
+  $('#saved-list').innerHTML = names.map(name => `
+    <div class="saved-item" data-name="${esc(name)}">
+      <span class="saved-name">${esc(name)}</span>
+      <button class="saved-delete" data-del="${esc(name)}" title="Delete">✕</button>
+    </div>`).join('');
+  $$('#saved-list .saved-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.dataset.del) return; // let the delete button handle its own click
+      const name = el.dataset.name;
+      setSql(m[name]);
+      focusEditor();
+    });
+  });
+  $$('#saved-list .saved-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.del;
+      if (!confirm(`Delete saved query "${name}"?`)) return;
+      const m2 = savedLoad();
+      delete m2[name];
+      savedSave(m2);
+      renderSavedList();
+    });
+  });
+}
+
+function saveCurrentQuery() {
+  const sql = getSql().trim();
+  if (!sql) { alert('Nothing to save — editor is empty.'); return; }
+  const name = prompt('Save this query as:', '');
+  if (!name || !name.trim()) return;
+  const m = savedLoad();
+  m[name.trim()] = sql;
+  savedSave(m);
+  renderSavedList();
+  // Switch left panel to Saved so the user sees their new entry
+  $$('.left-tabs > button').forEach(b => { if (b.dataset.lp === 'lp-saved') b.click(); });
 }
 
 // ================================================================ TABS
@@ -377,15 +520,16 @@ function renderHistory() {
 }
 
 let lastResult = null;
+let tableSort = { col: null, dir: 1 };   // 1 = asc, -1 = desc
 
 async function runPlaygroundQuery() {
-  const sql = $('#pg-sql').value.trim();
+  const sql = getSql().trim();
   const timeoutMs = +$('#pg-timeout').value || 5000;
   const retries = +$('#pg-retries').value || 0;
   if (!sql) return;
   $('#pg-result').hidden = false;
   $('#pg-meta').textContent = 'Running…';
-  $('#pg-table').innerHTML = '';
+  $('#pg-table-body').innerHTML = '';
   $('#pg-json').textContent = '';
   const t0 = performance.now();
   try {
@@ -397,19 +541,71 @@ async function runPlaygroundQuery() {
     const dt = Math.round(performance.now() - t0);
     const meta = `${body.rowCount} rows · ${dt}ms · attempts=${body.attempts}${body.timedOut ? ' · TIMED OUT' : ''}`;
     $('#pg-meta').textContent = meta;
+    $('#pg-table-info').textContent = `${body.rowCount} rows · queryId ${body.queryId}`;
     $('#pg-json').textContent = fmtJson(body);
-    $('#pg-table').innerHTML = renderTable(body.rows);
     lastResult = body;
+    tableSort = { col: null, dir: 1 };
+    renderResultTable();
     populateChartControls(body.rows);
     pushHistory(sql, meta);
   } catch (e) {
     $('#pg-meta').textContent = `error: ${e.status || ''} ${e.body?.error || ''}`;
     $('#pg-json').textContent = fmtJson(e.body || { error: e.message });
-    $('#pg-table').innerHTML = `<p><small style="color:var(--danger)">${esc(e.body?.message || e.message)}</small></p>`;
+    $('#pg-table-body').innerHTML = `<p><small style="color:var(--danger)">${esc(e.body?.message || e.message)}</small></p>`;
+    $('#pg-table-info').textContent = 'error';
     lastResult = null;
   }
 }
 
+function renderResultTable() {
+  const rows = lastResult?.rows || [];
+  const body = $('#pg-table-body');
+  if (!rows.length) { body.innerHTML = '<p><small>Empty result set.</small></p>'; return; }
+  const cols = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set()));
+
+  // Apply current sort (non-destructive on lastResult.rows)
+  let sortedRows = rows;
+  if (tableSort.col) {
+    sortedRows = rows.slice().sort((a, b) => {
+      const va = a[tableSort.col];
+      const vb = b[tableSort.col];
+      if (va === vb) return 0;
+      if (va === null || va === undefined) return 1;
+      if (vb === null || vb === undefined) return -1;
+      const ta = typeof va, tb = typeof vb;
+      if (ta === 'number' && tb === 'number') return (va - vb) * tableSort.dir;
+      return String(va).localeCompare(String(vb)) * tableSort.dir;
+    });
+  }
+
+  const header = '<th class="row-num-header">#</th>' + cols.map(c => {
+    const cls = tableSort.col === c ? (tableSort.dir === 1 ? 'sort-asc' : 'sort-desc') : 'sortable';
+    return `<th class="${cls} sortable" data-col="${esc(c)}">${esc(c)}</th>`;
+  }).join('');
+  const bodyHtml = sortedRows.map((r, i) =>
+    `<tr>
+       <td class="row-num">${i + 1}</td>
+       ${cols.map(c => `<td>${esc(fmtCell(r[c]))}</td>`).join('')}
+     </tr>`).join('');
+  body.innerHTML = `<div class="scroll"><table class="result"><thead><tr>${header}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
+
+  $$('#pg-table-body th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      if (tableSort.col === col) tableSort.dir = -tableSort.dir;
+      else { tableSort.col = col; tableSort.dir = 1; }
+      renderResultTable();
+    });
+  });
+}
+
+function fmtCell(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+// Simple non-sortable table renderer — used by the schema panel's sample-rows view.
 function renderTable(rows) {
   if (!rows || !rows.length) return '<p><small>Empty result set.</small></p>';
   const cols = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set()));
@@ -417,10 +613,50 @@ function renderTable(rows) {
   const bodyHtml = rows.map(r => `<tr>${cols.map(c => `<td>${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('');
   return `<div class="scroll"><table class="result"><thead><tr>${header}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
 }
-function fmtCell(v) {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+
+// ================================================================ EXPORT
+function exportCsv() {
+  const rows = lastResult?.rows;
+  if (!rows || !rows.length) return;
+  const cols = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set()));
+  const esc = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (/[,"\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const lines = [cols.join(',')];
+  for (const r of rows) lines.push(cols.map(c => esc(r[c])).join(','));
+  download('result.csv', 'text/csv', lines.join('\n'));
+}
+
+function exportJson() {
+  if (!lastResult) return;
+  download('result.json', 'application/json', fmtJson(lastResult));
+}
+
+function download(name, mime, content) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function copyJsonToClipboard() {
+  if (!lastResult) return;
+  try {
+    await navigator.clipboard.writeText(fmtJson(lastResult));
+    const btn = $('#pg-copy-json');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (e) {
+    alert('Copy failed: ' + e.message);
+  }
 }
 
 // ================================================================ CHART
@@ -749,23 +985,64 @@ async function refreshMetricsSnapshot() {
   }
 }
 
+// ================================================================ LEFT PANEL TABS
+function bindLeftPanelTabs() {
+  $$('.left-tabs > button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      $$('.left-tabs > button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      $$('.lp-view').forEach(v => v.classList.remove('active'));
+      $('#' + btn.dataset.lp).classList.add('active');
+      if (btn.dataset.lp === 'lp-schema') refreshSchemaTree();
+    });
+  });
+}
+
+// ================================================================ CODEMIRROR
+function initCodeMirror() {
+  const textarea = $('#pg-sql');
+  if (!textarea || typeof CodeMirror === 'undefined') return;
+  cmEditor = CodeMirror.fromTextArea(textarea, {
+    mode: 'text/x-sql',
+    lineNumbers: true,
+    matchBrackets: true,
+    indentWithTabs: false,
+    smartIndent: true,
+    lineWrapping: true,
+    extraKeys: {
+      'Ctrl-Enter': runPlaygroundQuery,
+      'Cmd-Enter': runPlaygroundQuery,
+      'Ctrl-S': (cm) => { saveCurrentQuery(); return false; },
+      'Cmd-S': (cm) => { saveCurrentQuery(); return false; },
+    },
+  });
+}
+
 // ================================================================ BOOT
 document.addEventListener('DOMContentLoaded', () => {
   bindTabs('.tabs');
   bindTabs('.sub-tabs');
+  bindLeftPanelTabs();
+  initCodeMirror();
   renderSnippets();
+  renderSavedList();
 
   $('#pg-run').addEventListener('click', runPlaygroundQuery);
   $('#pg-clear').addEventListener('click', () => {
-    $('#pg-sql').value = '';
+    setSql('');
     $('#pg-result').hidden = true;
     lastResult = null;
   });
   $('#pg-explain-btn').addEventListener('click', () => {
-    $('#ex-sql').value = $('#pg-sql').value;
+    $('#ex-sql').value = getSql();
     $$('.tabs > button').forEach(b => { if (b.dataset.target === 'explain') b.click(); });
     runExplain();
   });
+  $('#pg-save').addEventListener('click', saveCurrentQuery);
+  $('#pg-export-csv').addEventListener('click', exportCsv);
+  $('#pg-export-json').addEventListener('click', exportJson);
+  $('#pg-copy-json').addEventListener('click', copyJsonToClipboard);
+  $('#schema-refresh').addEventListener('click', refreshSchemaTree);
   $('#pg-history-clear').addEventListener('click', () => {
     localStorage.removeItem(HISTORY_KEY);
     renderHistory();

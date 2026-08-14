@@ -214,44 +214,198 @@ table.result tbody tr:hover {
   max-height: 60px;
 }
 
-/* Snippet library */
+/* SQL IDE layout */
 .pg-grid {
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 260px 1fr;
   gap: 1rem;
+  align-items: start;
 }
-@media (max-width: 800px) {
+@media (max-width: 900px) {
   .pg-grid { grid-template-columns: 1fr; }
 }
-.snippet-panel {
-  max-height: 700px;
+
+.ide-left-panel {
+  max-height: 800px;
   overflow-y: auto;
+  padding: 0.75rem;
 }
-.snippet-panel .snippet-category {
+.left-tabs {
+  margin: -0.75rem -0.75rem 0.5rem -0.75rem;
+  padding: 0 0.75rem;
+  border-bottom-width: 1px;
+}
+.left-tabs button {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+}
+.lp-view { display: none; }
+.lp-view.active { display: block; }
+
+/* Snippet items (also used inside left panel) */
+.snippet-category {
   font-size: 0.7rem;
   text-transform: uppercase;
   color: var(--muted);
   margin: 0.75rem 0 0.25rem 0;
   letter-spacing: 0.05em;
 }
-.snippet-panel .snippet-item {
+.snippet-item {
   padding: 0.4rem 0.5rem;
   cursor: pointer;
   border-radius: 4px;
   font-size: 0.85rem;
   border: 1px solid transparent;
 }
-.snippet-panel .snippet-item:hover {
+.snippet-item:hover {
   background: var(--pico-muted-border-color);
   border-color: var(--pico-muted-border-color);
 }
-.snippet-panel .snippet-item .snippet-name {
+.snippet-item .snippet-name {
   font-weight: 500;
   color: var(--primary-mesh);
 }
-.snippet-panel .snippet-item .snippet-desc {
+.snippet-item .snippet-desc {
   color: var(--muted);
   font-size: 0.75rem;
   margin-top: 0.1rem;
+}
+
+/* Schema tree */
+.schema-tree { font-size: 0.85rem; }
+.schema-tree .schema-table {
+  margin-bottom: 0.5rem;
+}
+.schema-tree .schema-table-head {
+  padding: 0.35rem 0.4rem;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  user-select: none;
+}
+.schema-tree .schema-table-head:hover { background: var(--pico-muted-border-color); }
+.schema-tree .schema-table-head .arrow { color: var(--muted); font-size: 0.7rem; transition: transform 0.1s; }
+.schema-tree .schema-table-head.open .arrow { transform: rotate(90deg); }
+.schema-tree .schema-table-name { font-weight: 600; color: var(--primary-mesh); flex: 1; }
+.schema-tree .schema-badge {
+  font-size: 0.65rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: var(--pico-muted-border-color);
+  color: var(--muted);
+}
+.schema-tree .schema-badge.broadcast { background: var(--accent-mesh); color: white; }
+.schema-tree .schema-badge.streaming { background: var(--primary-mesh); color: white; }
+.schema-tree .schema-cols {
+  margin-left: 0.75rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--pico-muted-border-color);
+  display: none;
+}
+.schema-tree .schema-table-head.open + .schema-cols { display: block; }
+.schema-tree .schema-col {
+  padding: 0.2rem 0.4rem;
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.schema-tree .schema-col:hover { background: var(--pico-muted-border-color); }
+.schema-tree .schema-col .col-name { color: var(--pico-color); }
+.schema-tree .schema-col .col-type { color: var(--muted); font-size: 0.7rem; }
+
+/* Saved queries */
+.saved-item {
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.saved-item:hover {
+  background: var(--pico-muted-border-color);
+  border-color: var(--pico-muted-border-color);
+}
+.saved-item .saved-name { color: var(--primary-mesh); font-weight: 500; flex: 1; }
+.saved-item .saved-delete {
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  width: auto;
+  font-size: 0.85rem;
+}
+
+/* CodeMirror editor styling — wraps the SQL textarea */
+.CodeMirror {
+  height: 180px;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 4px;
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.9rem;
+}
+.CodeMirror-focused { border-color: var(--primary-mesh); }
+.CodeMirror-gutters {
+  background: var(--pico-card-background-color);
+  border-right: 1px solid var(--pico-muted-border-color);
+}
+.CodeMirror-linenumber { color: var(--muted); }
+
+/* Result toolbar */
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+.result-toolbar button {
+  width: auto;
+  margin: 0;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* Sortable table headers */
+table.result th.sortable {
+  cursor: pointer;
+  user-select: none;
+  padding-right: 1.5rem;
+  position: relative;
+}
+table.result th.sortable:hover { background: var(--pico-muted-border-color); }
+table.result th.sortable::after {
+  content: '⇅';
+  position: absolute;
+  right: 0.5rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+table.result th.sort-asc::after { content: '▲'; color: var(--primary-mesh); }
+table.result th.sort-desc::after { content: '▼'; color: var(--primary-mesh); }
+
+table.result td.row-num {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: right;
+  min-width: 2.5rem;
+  border-right: 1px solid var(--pico-muted-border-color);
+}
+table.result th.row-num-header {
+  color: var(--muted);
+  font-weight: normal;
+  background: transparent;
 }
 
 .pg-main article { margin-bottom: 1rem; }

@@ -5,8 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hitorro Mesh — Admin</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.css">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/sql/sql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/edit/matchbrackets.min.js"></script>
 </head>
 <body>
 
@@ -183,28 +187,47 @@
     </article>
   </section>
 
-  <!-- ================== PLAYGROUND ================== -->
+  <!-- ================== PLAYGROUND (SQL IDE) ================== -->
   <section id="playground" class="tab-panel">
     <div class="grid pg-grid">
-      <!-- Snippet library -->
-      <article class="snippet-panel">
-        <header>Snippets <small class="meta">click to load</small></header>
-        <div id="snippet-list"></div>
+
+      <!-- Left panel: 3 tabs (snippets / schema / saved) -->
+      <article class="ide-left-panel">
+        <div class="tabs left-tabs">
+          <button data-lp="lp-snippets" class="active">Snippets</button>
+          <button data-lp="lp-schema">Schema</button>
+          <button data-lp="lp-saved">Saved</button>
+        </div>
+        <div id="lp-snippets" class="lp-view active">
+          <p><small class="meta">Click to load into editor</small></p>
+          <div id="snippet-list"></div>
+        </div>
+        <div id="lp-schema" class="lp-view">
+          <p><small class="meta">Click a table or column to insert</small></p>
+          <div id="schema-tree">Loading…</div>
+          <button id="schema-refresh" class="secondary outline"
+                  style="width:100%;font-size:0.75rem;margin-top:0.5rem;">↻ Refresh schema</button>
+        </div>
+        <div id="lp-saved" class="lp-view">
+          <p><small class="meta">Named queries saved in this browser</small></p>
+          <div id="saved-list"></div>
+        </div>
       </article>
 
-      <!-- Editor + result (span 3 cols) -->
+      <!-- Editor + result (main column) -->
       <div class="pg-main">
         <article>
           <header>
-            <span>SQL query</span>
-            <span id="pg-editor-hint" class="meta"></span>
+            <span>SQL editor</span>
+            <span id="pg-editor-hint" class="meta">Ctrl+Enter to run</span>
           </header>
-          <textarea id="pg-sql" rows="5" placeholder="SELECT lang, COUNT(*) FROM docs GROUP BY lang">SELECT lang, COUNT(*) AS n FROM docs GROUP BY lang</textarea>
+          <textarea id="pg-sql">SELECT lang, COUNT(*) AS n FROM docs GROUP BY lang</textarea>
           <div class="row">
             <label>Timeout (ms) <input type="number" id="pg-timeout" value="5000" min="1"></label>
             <label>Retries <input type="number" id="pg-retries" value="0" min="0" max="5"></label>
-            <button id="pg-run">▶ Run query</button>
-            <button id="pg-explain-btn" class="secondary">Explain plan</button>
+            <button id="pg-run">▶ Run</button>
+            <button id="pg-explain-btn" class="secondary">Explain</button>
+            <button id="pg-save" class="secondary outline">💾 Save</button>
             <button id="pg-clear" class="secondary outline">Clear</button>
           </div>
         </article>
@@ -219,7 +242,18 @@
             <button data-view="pg-chart">Chart</button>
             <button data-view="pg-json">JSON</button>
           </div>
-          <div id="pg-table" class="view active"></div>
+
+          <div id="pg-table" class="view active">
+            <div class="result-toolbar">
+              <span id="pg-table-info" class="meta">—</span>
+              <span style="flex:1;"></span>
+              <button id="pg-export-csv" class="secondary outline">📄 CSV</button>
+              <button id="pg-export-json" class="secondary outline">📄 JSON</button>
+              <button id="pg-copy-json" class="secondary outline">📋 Copy</button>
+            </div>
+            <div id="pg-table-body"></div>
+          </div>
+
           <div id="pg-chart" class="view">
             <div class="row" style="margin-bottom: 0.5rem;">
               <label>Chart type
@@ -240,7 +274,8 @@
         <article>
           <header>
             <span>Recent (this browser)</span>
-            <button id="pg-history-clear" class="secondary outline" style="width:auto;margin:0;font-size:0.8rem;">Clear</button>
+            <button id="pg-history-clear" class="secondary outline"
+                    style="width:auto;margin:0;font-size:0.8rem;">Clear history</button>
           </header>
           <div id="pg-history">
             <p><small>No queries yet.</small></p>
