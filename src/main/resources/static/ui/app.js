@@ -83,7 +83,35 @@ const insertAtCursor = (s) => {
   }
 };
 
+// Set to a dataset-context object when the user arrived at Playground via
+// the Datasets tab's Quick queries; null when back to the generic view.
+// Shape: { id, tableName, title, snippets: [{name, desc, sql}] }.
+let pgDatasetContext = null;
+
 function renderSnippets() {
+  // Dataset-tuned mode: replace the generic library with per-column
+  // queries built from the current dataset's manifest.
+  if (pgDatasetContext) {
+    const ctx = pgDatasetContext;
+    $('#snippet-list').innerHTML = `
+      <div class="snippet-category">${esc(ctx.title || ctx.tableName)}</div>
+      ${ctx.snippets.map((s, i) => `
+        <div class="snippet-item" data-dsidx="${i}">
+          <div class="snippet-name">${esc(s.name)}</div>
+          <div class="snippet-desc">${esc(s.desc)}</div>
+        </div>`).join('')}
+    `;
+    $$('#snippet-list .snippet-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const s = ctx.snippets[+el.dataset.dsidx];
+        setSql(s.sql);
+        focusEditor();
+      });
+    });
+    return;
+  }
+
+  // Generic mode — the shipped snippet library.
   const byCat = {};
   SNIPPETS.forEach(s => { (byCat[s.cat] = byCat[s.cat] || []).push(s); });
   $('#snippet-list').innerHTML = Object.entries(byCat).map(([cat, items]) => `
@@ -105,6 +133,91 @@ function renderSnippets() {
       focusEditor();
     });
   });
+}
+
+/**
+ * Called by the Datasets tab's Quick-query buttons before switching tabs.
+ * Records dataset context, populates dataset-specific snippets, and shows
+ * the "Playing with <name>" banner at the top of the editor.
+ *
+ * @param manifest full manifest object from /mesh/datasets/{id}
+ * @param tableName SQL name (snake_case)
+ */
+function setPlaygroundDatasetContext(manifest, tableName) {
+  const rels = manifest.relationships || [];
+  const fields = manifest.record?.fields || [];
+  const pk = manifest.record?.primaryKey;
+
+  // Build a rich per-dataset snippet library. The layout mirrors the
+  // Datasets tab's Quick-queries block but pushes deeper into the schema
+  // (id.* group-bys, geo.* filters, USING PLACE per relationship).
+  const snippets = [];
+  snippets.push({
+    name: 'Peek 20 rows',
+    desc: `SELECT * FROM ${tableName} LIMIT 20`,
+    sql: `SELECT * FROM ${tableName} LIMIT 20`,
+  });
+  if (pk) {
+    snippets.push({
+      name: `Count by ${pk}`,
+      desc: 'group by primary key',
+      sql: `SELECT ${pk}, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY ${pk}\nORDER BY n DESC\nLIMIT 20`,
+    });
+  }
+  fields.filter(f => f.role && f.role.startsWith('id.') && f.name !== pk).forEach(f => {
+    snippets.push({
+      name: `GROUP BY ${f.name}`,
+      desc: `id role: ${f.role}`,
+      sql: `SELECT ${f.name}, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY ${f.name}\nORDER BY n DESC\nLIMIT 20`,
+    });
+  });
+  const popField = fields.find(f => f.role === 'geo.population');
+  if (popField) {
+    snippets.push({
+      name: `Top ${tableName} by population`,
+      desc: `${popField.name} DESC`,
+      sql: `SELECT *\nFROM ${tableName}\nWHERE ${popField.name} IS NOT NULL\nORDER BY ${popField.name} DESC\nLIMIT 20`,
+    });
+  }
+  const elevField = fields.find(f => f.role === 'geo.elevation');
+  if (elevField) {
+    snippets.push({
+      name: `High altitude`,
+      desc: `${elevField.name} > 3000`,
+      sql: `SELECT *\nFROM ${tableName}\nWHERE ${elevField.name} > 3000\nORDER BY ${elevField.name} DESC\nLIMIT 20`,
+    });
+  }
+  rels.filter(r => r.kind === 'EXACT_ID').forEach(r => {
+    const target = (r.target || '').replace(/-/g, '_');
+    snippets.push({
+      name: `JOIN ${target}`,
+      desc: 'USING PLACE — check the semantic toggle to auto-rewrite',
+      sql: `SELECT a.*, b.*\nFROM ${tableName} a\nJOIN ${target} b USING PLACE\nLIMIT 10`,
+    });
+  });
+
+  pgDatasetContext = {
+    id: manifest.id,
+    tableName,
+    title: manifest.title,
+    snippets,
+  };
+
+  $('#pg-context-name').textContent = manifest.title || tableName;
+  $('#pg-context').hidden = false;
+  // Ensure the Snippets sub-tab is open so the tuned list is visible.
+  const lpSnippetsBtn = document.querySelector('[data-lp="lp-snippets"]');
+  if (lpSnippetsBtn && !lpSnippetsBtn.classList.contains('active')) lpSnippetsBtn.click();
+  renderSnippets();
+  // Also flip the semantic toggle on — most of the tuned snippets are
+  // USING PLACE joins that only work with it on.
+  $('#pg-semantic').checked = true;
+}
+
+function clearPlaygroundDatasetContext() {
+  pgDatasetContext = null;
+  $('#pg-context').hidden = true;
+  renderSnippets();
 }
 
 // ================================================================ SCHEMA TREE
@@ -355,10 +468,14 @@ async function selectDataset(id) {
   $('#ds-quick').innerHTML = buildQuickQueries(tableName, manifest, rels);
   $$('#ds-quick button').forEach(b => {
     b.addEventListener('click', () => {
-      // Copy this dataset's query into the Playground editor and switch tabs.
+      // Prime Playground with this dataset's context BEFORE switching
+      // tabs — so the left panel shows tuned snippets, the context
+      // banner appears, and the semantic toggle turns on where useful.
+      setPlaygroundDatasetContext(manifest, tableName);
+      // Then drop the specific SQL into the editor.
       const sql = b.dataset.sql;
       if (typeof setSql === 'function') setSql(sql);
-      // Programmatic tab switch — mimic clicking the Playground tab button.
+      // Finally switch tabs — the "click Playground tab" click.
       const pg = document.querySelector('[data-target="playground"]');
       if (pg) pg.click();
     });
@@ -1276,6 +1393,12 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#active-refresh').addEventListener('click', refreshActive);
   $('#schema-close').addEventListener('click', () => { $('#schema-panel').hidden = true; });
   $('#ds-sample-refresh').addEventListener('click', refreshSample);
+  // Context banner buttons on the Playground.
+  $('#pg-context-back').addEventListener('click', () => {
+    const dsBtn = document.querySelector('[data-target="datasets"]');
+    if (dsBtn) dsBtn.click();
+  });
+  $('#pg-context-close').addEventListener('click', clearPlaygroundDatasetContext);
 
   // Phase 7p — runtime table/broadcast registration forms.
   $('#add-table-btn').addEventListener('click', () => {

@@ -275,6 +275,20 @@
 
       <!-- Editor + result (main column) -->
       <div class="pg-main">
+        <!-- Dataset-context banner: populated when the user arrives via a
+             Quick-query button from the Datasets tab. Dismissable; nothing
+             at all when in "generic" mode. -->
+        <div id="pg-context" hidden style="margin-bottom: 0.5rem; padding: 0.5rem 0.75rem;
+              background: #eaf3f8; border-left: 3px solid #2E86AB; border-radius: 0.25rem;
+              display: flex; align-items: center; gap: 0.5rem;">
+          <span>▶ Playing with <strong id="pg-context-name">—</strong></span>
+          <span class="meta">— snippets + schema tuned to this dataset</span>
+          <span style="flex: 1;"></span>
+          <button id="pg-context-back" class="secondary outline"
+                  style="padding: 0.15rem 0.6rem; font-size: 0.8em; margin: 0;">← back to Datasets</button>
+          <button id="pg-context-close" class="secondary outline"
+                  style="padding: 0.15rem 0.6rem; font-size: 0.8em; margin: 0;" title="Return to generic snippets">×</button>
+        </div>
         <article>
           <header>
             <span>SQL editor</span>
