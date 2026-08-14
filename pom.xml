@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.hitorro</groupId>
+    <artifactId>hitorro-mesh-driver-app</artifactId>
+    <version>3.0.1</version>
+    <packaging>jar</packaging>
+
+    <name>hitorro-mesh-driver-app</name>
+    <description>Runnable Spring Boot driver for the Hitorro Mesh. Hosts a MeshDriver, exposes REST endpoints for query submission (POST /mesh/queries), agent inventory (GET /mesh/agents), and distributed table registration (POST /mesh/tables). Uses the NATS transport by default; falls back to in-memory for single-JVM demos.</description>
+
+    <properties>
+        <hitorro.deploy.repo.path>${user.home}/code/hitorro-maven</hitorro.deploy.repo.path>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <spring-boot.version>3.2.2</spring-boot.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!--
+        Same aggressive exclusion strategy as hitorro-mesh-agent-app — see that
+        pom for rationale. Repeated per hitorro dep because Maven exclusions
+        are per-dep-edge. Result: 900MB → ~150MB fat jar.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-core</artifactId>
+            <version>3.0.1</version>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+                <exclusion><groupId>commons-logging</groupId><artifactId>commons-logging</artifactId></exclusion>
+                <exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop.thirdparty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.wildfly.openssl</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty.toolchain</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.bouncycastle</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.codehaus.groovy</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.jruby</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.poi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.pdfbox</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.xmlbeans</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.drewnoakes</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.jthink</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.xmlrpc</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.ws.commons</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.sun.mail</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.sshd</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.wimpi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>io.lettuce</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>io.netty</groupId><artifactId>netty-tcnative-boringssl-static</artifactId></exclusion>
+                <exclusion><groupId>org.quartz-scheduler</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-driver</artifactId>
+            <version>3.0.1</version>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+                <exclusion><groupId>commons-logging</groupId><artifactId>commons-logging</artifactId></exclusion>
+                <exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop.thirdparty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.wildfly.openssl</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty.toolchain</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.bouncycastle</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.codehaus.groovy</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.jruby</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.opennlp</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.microsoft.onnxruntime</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.huggingface</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.api</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.sf.extjwnl</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.poi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.pdfbox</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.xmlbeans</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.drewnoakes</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.jthink</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.xmlrpc</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.ws.commons</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.sun.mail</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.sshd</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.wimpi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>io.lettuce</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>io.netty</groupId><artifactId>netty-tcnative-boringssl-static</artifactId></exclusion>
+                <exclusion><groupId>org.quartz-scheduler</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+        <!--
+             Orion bridge is a compile-time dep because the ClusterManager
+             SPI lives there (historical — will move to mesh-core when we
+             add a third bridge). The Orion HTTP-API implementation is only
+             used when hitorro.mesh.driver.cluster=orion.
+
+             K8s bridge is deliberately NOT a compile-time dep — it's
+             loaded reflectively when hitorro.mesh.driver.cluster=k8s.
+             Add hitorro-mesh-k8s to the classpath (drop the jar next to
+             this one, or add as a runtime dep) when deploying on K8s.
+        -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-orion</artifactId>
+            <version>3.0.1</version>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+                <exclusion><groupId>commons-logging</groupId><artifactId>commons-logging</artifactId></exclusion>
+                <exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop.thirdparty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.bouncycastle</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.codehaus.groovy</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.jruby</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.opennlp</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.microsoft.onnxruntime</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.huggingface</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.api</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.poi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.pdfbox</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-nats</artifactId>
+            <version>3.0.1</version>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+                <exclusion><groupId>commons-logging</groupId><artifactId>commons-logging</artifactId></exclusion>
+                <exclusion><groupId>log4j</groupId><artifactId>log4j</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.hadoop.thirdparty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.bouncycastle</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.codehaus.groovy</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.jruby</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Prometheus scrape endpoint exposed at /actuator/prometheus.
+             Optional runtime dep — omit if you scrape metrics some other way. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <configuration>
+                    <mainClass>com.hitorro.mesh.driver.app.MeshDriverApplication</mainClass>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals><goal>repackage</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <distributionManagement>
+        <repository>
+            <id>hitorro-local</id>
+            <url>file://${hitorro.deploy.repo.path}</url>
+        </repository>
+    </distributionManagement>
+</project>
