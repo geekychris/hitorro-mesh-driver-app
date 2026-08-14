@@ -318,6 +318,46 @@ table.result tbody tr:hover {
 }
 .ds-quick button:hover { background: var(--primary-mesh); color: white; }
 
+/* "About this dataset" block — first thing users see after the header */
+.ds-about h5 {
+  margin: 0.75rem 0 0.25rem 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.ds-about p { margin: 0.25rem 0 0.5rem 0; font-size: 0.9rem; line-height: 1.5; }
+.ds-about ul { margin: 0.25rem 0 0.5rem 1.25rem; padding: 0; font-size: 0.9rem; }
+.ds-about li { margin-bottom: 0.2rem; }
+.ds-about a { color: var(--primary-mesh); font-weight: 600; }
+.ds-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: #f8f9fa;
+  border-radius: 0.25rem;
+  margin-top: 0.5rem;
+}
+.ds-stats-grid > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.ds-stat-num {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--primary-mesh);
+  line-height: 1.2;
+}
+.ds-stat-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ds-about-block { margin-top: 0.5rem; }
+
 .ide-left-panel {
   max-height: 800px;
   overflow-y: auto;

@@ -450,6 +450,11 @@ async function selectDataset(id) {
     $('#ds-selected').querySelector('header').after(notice);
   }
 
+  // "About this dataset" block — rendered from manifest.metadata when
+  // present. Skipped entirely on datasets without a metadata block so
+  // they read exactly as before.
+  renderDatasetMetadata(manifest);
+
   // Schema table — highlight fields with a role (that's the whole story
   // of semantic joins).
   const fields = manifest.record?.fields || [];
@@ -508,6 +513,68 @@ async function selectDataset(id) {
 
   // Raw manifest (for the curious / for copy-paste)
   $('#ds-raw').textContent = fmtJson(manifest);
+}
+
+/**
+ * Render the "About this dataset" section from manifest.metadata.
+ * Silently skips if no metadata block exists.
+ * Anchors to a single #ds-about container inserted below the header
+ * (removed and re-created every time so the pane fully reflects the
+ * currently-selected dataset).
+ */
+function renderDatasetMetadata(manifest) {
+  const md = manifest.metadata;
+  const old = document.getElementById('ds-about');
+  if (old) old.remove();
+  if (!md) return;
+
+  const stats = md.stats || {};
+  const rowsLabel = stats.rowCount != null ? Number(stats.rowCount).toLocaleString() : '—';
+  const sizeLabel = stats.sizeBytes != null ? humanBytes(stats.sizeBytes) : '—';
+  const cadenceLabel = stats.refreshCadence || '—';
+  const coverageLabel = stats.coverage || '';
+
+  const useCasesHtml = (md.useCases || []).length === 0 ? '' : `
+    <div class="ds-about-block">
+      <h5>What's it for?</h5>
+      <ul>${md.useCases.map(u => `<li>${esc(u)}</li>`).join('')}</ul>
+    </div>`;
+  const methodologyHtml = !md.methodology ? '' : `
+    <div class="ds-about-block">
+      <h5>How is it collected?</h5>
+      <p>${esc(md.methodology)}</p>
+    </div>`;
+  const readMoreHtml = !md.furtherReading ? '' : `
+    <div class="ds-about-block">
+      <a href="${esc(md.furtherReading)}" target="_blank" rel="noopener">Further reading →</a>
+    </div>`;
+
+  const about = document.createElement('div');
+  about.id = 'ds-about';
+  about.className = 'ds-about ds-section';
+  about.innerHTML = `
+    <h4>About this dataset</h4>
+    <div class="ds-stats-grid">
+      <div><span class="ds-stat-num">${rowsLabel}</span><span class="ds-stat-label">rows</span></div>
+      <div><span class="ds-stat-num">${sizeLabel}</span><span class="ds-stat-label">size</span></div>
+      <div><span class="ds-stat-num">${esc(cadenceLabel)}</span><span class="ds-stat-label">refresh</span></div>
+      ${coverageLabel ? `<div style="grid-column: 1 / -1;"><span class="ds-stat-label">coverage:</span> ${esc(coverageLabel)}</div>` : ''}
+    </div>
+    ${useCasesHtml}
+    ${methodologyHtml}
+    ${readMoreHtml}
+  `;
+  // Insert after the header (and the license-notice, if it was added).
+  const header = $('#ds-selected').querySelector('header');
+  const licenseNotice = document.getElementById('ds-license-notice');
+  (licenseNotice || header).after(about);
+}
+
+function humanBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
 
 function buildQuickQueries(tableName, manifest, rels) {
