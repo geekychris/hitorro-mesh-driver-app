@@ -341,10 +341,11 @@ table.result tbody tr:hover {
   font-size: 0.7rem; padding: 0.05rem 0.45rem; border-radius: 0.2rem;
   font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
 }
-.ds-win-kind-exact-id  { background: #2E86AB; color: white; }
-.ds-win-kind-spatial   { background: var(--accent-mesh); color: white; }
-.ds-win-kind-hub       { background: var(--success); color: white; }
-.ds-win-kind-mixed     { background: #7f8c8d; color: white; }
+.ds-win-kind-exact-id     { background: #2E86AB; color: white; }
+.ds-win-kind-spatial      { background: var(--accent-mesh); color: white; }
+.ds-win-kind-hub          { background: var(--success); color: white; }
+.ds-win-kind-mixed        { background: #7f8c8d; color: white; }
+.ds-win-kind-multi-value  { background: #8e44ad; color: white; }  /* JVS multi-value LIKE queries */
 .ds-win-hops           { background: #eef; color: var(--primary-mesh); }
 .ds-win-license                       { background: #eef; color: var(--muted); }
 .ds-win-license-share-alike           { background: #fce4e4; color: var(--danger); }
