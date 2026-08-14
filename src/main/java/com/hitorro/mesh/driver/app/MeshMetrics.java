@@ -24,6 +24,10 @@ import java.util.List;
  *   <li>{@code mesh_agents_live} — gauge — live jvssql-capable agent count</li>
  *   <li>{@code mesh_tables_registered} — gauge — number of distributed tables</li>
  *   <li>{@code mesh_broadcast_tables_registered} — gauge — number of broadcast tables</li>
+ *   <li>{@code mesh_backpressure_drops_total} — gauge (phase 7i) — total
+ *       rows dropped due to backpressure (bounded result queue full for
+ *       longer than the offer timeout). Non-zero → slow consumer or
+ *       under-sized queue cap; consider raising {@code hitorro.mesh.driver.max-queue-rows}.</li>
  * </ul>
  *
  * <p>Standard JVM meters ({@code jvm_*}, {@code process_*},
@@ -68,6 +72,10 @@ public class MeshMetrics {
                 d -> d.tables().all().size());
         registry.gauge("mesh.broadcast.tables.registered", driver,
                 d -> d.tables().broadcastNames().size());
+        // Phase 7i — backpressure drop counter, exposed as a gauge (the
+        // dispatcher tracks the total; Micrometer reads on scrape).
+        registry.gauge("mesh.backpressure.drops.total", driver,
+                d -> (double) d.dispatcher().backpressureDrops());
     }
 
     Timer submitTimerOk()   { return submitTimerOk; }
