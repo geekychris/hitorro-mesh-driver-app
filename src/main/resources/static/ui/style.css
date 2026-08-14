@@ -673,6 +673,25 @@ table.result th.row-num-header {
 .pl-node-sinks code { background: transparent; color: var(--primary-mesh); }
 .pl-node-err { color: var(--danger); font-size: 0.8rem; margin-top: 0.3rem; }
 
+/* Active + recent runs grid — multi-job dashboard on the Pipelines tab. */
+.pl-runs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: 0.6rem;
+}
+.pl-run-card {
+  padding: 0.6rem 0.75rem;
+  border: 2px solid #ddd; border-radius: 0.35rem;
+  background: white; cursor: pointer;
+  transition: transform 0.1s;
+}
+.pl-run-card:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+.pl-run-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem; }
+.pl-mini-node {
+  font-size: 0.7rem; padding: 0.05rem 0.4rem;
+  border-radius: 0.2rem; border: 1px solid #eee;
+}
+
 /* Schema panel */
 #schema-panel { border: 2px solid var(--primary-mesh); }
 #schema-fields dl { margin: 0; }

@@ -1812,26 +1812,67 @@ async function refreshRunHistory() {
   let runs = [];
   try { runs = await api('/mesh/jobs'); } catch (_) { }
   if (!runs.length) {
-    $('#pl-history').innerHTML = '<p class="meta">no runs yet</p>';
+    $('#pl-runs').innerHTML = '<p class="meta">no runs yet — click a bundled example above and hit ▶ Run</p>';
     return;
   }
-  $('#pl-history').innerHTML = `
-    <table style="width:100%; font-size: 0.85rem;">
-      <thead><tr>
-        <th>Job spec</th><th>Job id</th><th>State</th>
-        <th>Started</th><th>Finished</th><th>Nodes</th>
-      </tr></thead>
-      <tbody>${runs.map(r => `
-        <tr>
-          <td>${esc(r.jobSpecName || '?')}</td>
-          <td><code>${esc(r.jobId)}</code></td>
-          <td><span class="badge pl-state-${esc(r.state.toLowerCase())}">${esc(r.state)}</span></td>
-          <td class="meta">${esc(r.startedAt || '')}</td>
-          <td class="meta">${esc(r.finishedAt || '')}</td>
-          <td>${r.nodes.length}</td>
-        </tr>`).join('')}</tbody>
-    </table>`;
+  $('#pl-runs').innerHTML = runs.map(r => `
+    <div class="pl-run-card pl-node-${esc(r.state.toLowerCase())}" data-job="${esc(r.jobId)}">
+      <div class="pl-run-hdr">
+        <b>${esc(r.jobSpecName || '?')}</b>
+        <span class="badge pl-state-${esc(r.state.toLowerCase())}">${esc(r.state)}</span>
+      </div>
+      <div class="meta">
+        <code>${esc(r.jobId)}</code><br>
+        started ${esc(fmtTime(r.startedAt))}${r.finishedAt ? ' · finished ' + esc(fmtTime(r.finishedAt)) : ''}
+      </div>
+      <div style="margin-top: 0.4rem; display:flex; gap: 0.3rem; flex-wrap: wrap;">
+        ${(r.nodes || []).map(n => `
+          <span class="pl-mini-node pl-state-${esc(n.state.toLowerCase())}" title="${esc(n.id)}: ${esc(n.state)} · ${n.rowsIn}→${n.rowsOut}">
+            ${esc(n.id)} ${n.rowsOut > 0 ? '· ' + n.rowsOut : ''}
+          </span>`).join('')}
+      </div>
+      ${r.state === 'RUNNING' ? `
+        <div style="margin-top: 0.4rem;">
+          <button class="secondary outline pl-cancel-btn" type="button"
+                  data-job="${esc(r.jobId)}"
+                  style="padding: 0.1rem 0.5rem; font-size: 0.75rem; margin: 0;">
+            × cancel
+          </button>
+        </div>` : ''}
+    </div>
+  `).join('');
+  // Cancel-button wiring — one DELETE per click, non-blocking.
+  $$('.pl-cancel-btn').forEach(b => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const jobId = b.dataset.job;
+    try {
+      await api('/mesh/jobs/' + encodeURIComponent(jobId), { method: 'DELETE' });
+    } catch (err) {
+      alert('cancel failed: ' + err.message);
+    }
+  }));
+  // Click-a-card → pin the status panel to that job.
+  $$('.pl-run-card').forEach(c => c.addEventListener('click', () => {
+    const jobId = c.dataset.job;
+    if (!jobId) return;
+    $('#pl-status').hidden = false;
+    $('#pl-status-id').textContent = jobId;
+    startPolling(jobId);
+  }));
+
+  // If any RUNNING, schedule another refresh in 1s.
+  if (runs.some(r => r.state === 'RUNNING')) {
+    if (plHistoryTimer) clearTimeout(plHistoryTimer);
+    plHistoryTimer = setTimeout(refreshRunHistory, 1000);
+  }
 }
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
+}
+
+let plHistoryTimer = null;
 
 $(document).body?.addEventListener?.('click', () => { }); // no-op
 
