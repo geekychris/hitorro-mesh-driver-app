@@ -10,9 +10,12 @@ import com.hitorro.mesh.driver.DistributedTableRegistry;
 import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.mesh.driver.QueryDispatcher;
 import com.hitorro.mesh.driver.QueryPlanner;
+import com.hitorro.mesh.datasets.semantic.PlaceJoinRewriter;
+import com.hitorro.mesh.datasets.semantic.SemanticJoinException;
 import com.hitorro.mesh.orion.ClusterManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -74,10 +77,23 @@ public class MeshRestController {
                 return t;
             });
 
-    public MeshRestController(MeshDriver driver, ClusterManager clusterManager, MeshMetrics metrics) {
+    /**
+     * Optional — provided by the {@code hitorro-mesh-datasets} module's
+     * Spring autoconfig when that jar is on the classpath. When present,
+     * queries submitted with {@code semantic=true} get {@code USING PLACE}
+     * clauses rewritten into concrete ON clauses using declared manifest
+     * relationships before dispatch. When absent, {@code semantic=true}
+     * responds with a 400 (clear error, not a silent pass-through).
+     */
+    private final PlaceJoinRewriter placeJoinRewriter;
+
+    @Autowired
+    public MeshRestController(MeshDriver driver, ClusterManager clusterManager, MeshMetrics metrics,
+                              @Autowired(required = false) PlaceJoinRewriter placeJoinRewriter) {
         this.driver = driver;
         this.clusterManager = clusterManager;
         this.metrics = metrics;
+        this.placeJoinRewriter = placeJoinRewriter;
     }
 
     @PostMapping("/queries")
@@ -85,6 +101,37 @@ public class MeshRestController {
         long timeout = req.timeoutMs > 0 ? req.timeoutMs : 5_000;
         int retries = Math.max(0, req.retries);
         long tStart = System.nanoTime();
+
+        // Semantic pass — rewrite USING PLACE joins before Calcite ever
+        // sees the SQL. Runs only if the caller opted in via semantic=true;
+        // the raw SQL path is unchanged for every existing client.
+        String executedSql = req.sql;
+        String rewrittenSql = null;
+        if (req.semantic) {
+            if (placeJoinRewriter == null) {
+                throw new IllegalArgumentException(
+                        "semantic=true requires hitorro-mesh-datasets on the classpath "
+                        + "(no PlaceJoinRewriter bean available)");
+            }
+            try {
+                executedSql = placeJoinRewriter.rewrite(req.sql);
+            } catch (SemanticJoinException e) {
+                // SemanticJoinException messages are already written for the
+                // SQL author. Bubble to 400 via the existing handler.
+                throw new IllegalArgumentException(e.getMessage());
+            }
+            // Only report rewrittenSql when a change actually occurred — a
+            // semantic=true query with no USING PLACE clauses passes through
+            // unchanged and the response looks like a normal query.
+            if (!executedSql.equals(req.sql)) {
+                rewrittenSql = executedSql;
+                log.info("[semantic] rewrote USING PLACE\n  in : {}\n  out: {}",
+                        req.sql, executedSql);
+            }
+        }
+        // Effectively-final local for the retry loop below.
+        final String submitSql = executedSql;
+        final String rewritten = rewrittenSql;
         // Phase 7g — retry the whole query on AgentTaskException up to
         // `retries` times with exponential backoff (100ms, 200ms, 400ms, ...).
         // Retries only fire for AgentTaskException (a genuine agent failure);
@@ -94,7 +141,7 @@ public class MeshRestController {
         int totalAttempts = 1 + retries;
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
             try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
-                    req.sql, java.time.Duration.ofMillis(timeout))) {
+                    submitSql, java.time.Duration.ofMillis(timeout))) {
                 activeQueries.put(h.queryId(), h);
                 try {
                     List<JsonNode> rows = h.collect(timeout, TimeUnit.MILLISECONDS);
@@ -102,7 +149,7 @@ public class MeshRestController {
                     metrics.queriesOk().increment();
                     metrics.rowsReturned().increment(rows.size());
                     return new QueryResponse(h.queryId(), h.assignedAgents(),
-                            rows.size(), rows, h.timedOut(), attempt);
+                            rows.size(), rows, h.timedOut(), attempt, rewritten);
                 } finally {
                     activeQueries.remove(h.queryId());
                 }
@@ -514,21 +561,43 @@ public class MeshRestController {
      *                  Applies to whole-query resubmit — the entire query
      *                  is redispatched to a fresh agent pool.
      */
-    public record QueryRequest(String sql, long timeoutMs, int retries) {
-        /** Back-compat 2-arg constructor — retries defaults to 0. */
-        public QueryRequest(String sql, long timeoutMs) { this(sql, timeoutMs, 0); }
+    /**
+     * @param semantic when true, {@code sql} is fed through the datasets
+     *                 module's {@link PlaceJoinRewriter} before dispatch —
+     *                 lets clients use {@code JOIN ... USING PLACE} instead
+     *                 of hand-writing the ON clause. Requires the datasets
+     *                 module on the classpath; otherwise the request 400s
+     *                 with a clear message.
+     */
+    public record QueryRequest(String sql, long timeoutMs, int retries, boolean semantic) {
+        /** Back-compat 2-arg constructor — retries defaults to 0, semantic false. */
+        public QueryRequest(String sql, long timeoutMs) { this(sql, timeoutMs, 0, false); }
+        /** Back-compat 3-arg constructor — semantic defaults to false. */
+        public QueryRequest(String sql, long timeoutMs, int retries) { this(sql, timeoutMs, retries, false); }
     }
 
+    /**
+     * @param rewrittenSql set to the concrete SQL that actually ran, but
+     *                     ONLY when the semantic-join rewriter changed
+     *                     something — a semantic=true query with no USING
+     *                     PLACE clauses leaves this null.
+     */
     public record QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
-                                List<JsonNode> rows, boolean timedOut, int attempts) {
-        /** Back-compat overload — omit timedOut + attempts. */
+                                List<JsonNode> rows, boolean timedOut, int attempts,
+                                String rewrittenSql) {
+        /** Back-compat overload — omit timedOut + attempts + rewrittenSql. */
         public QueryResponse(String queryId, List<String> assignedAgents, int rowCount, List<JsonNode> rows) {
-            this(queryId, assignedAgents, rowCount, rows, false, 1);
+            this(queryId, assignedAgents, rowCount, rows, false, 1, null);
         }
-        /** Back-compat overload — omit attempts (defaults to 1). */
+        /** Back-compat overload — omit attempts + rewrittenSql (defaults 1, null). */
         public QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
                              List<JsonNode> rows, boolean timedOut) {
-            this(queryId, assignedAgents, rowCount, rows, timedOut, 1);
+            this(queryId, assignedAgents, rowCount, rows, timedOut, 1, null);
+        }
+        /** Back-compat overload — omit rewrittenSql (defaults to null). */
+        public QueryResponse(String queryId, List<String> assignedAgents, int rowCount,
+                             List<JsonNode> rows, boolean timedOut, int attempts) {
+            this(queryId, assignedAgents, rowCount, rows, timedOut, attempts, null);
         }
     }
 

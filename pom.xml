@@ -171,6 +171,20 @@
             </exclusions>
         </dependency>
 
+        <!--
+             Datasets catalog. Brings the manifests, license algebra,
+             semantic-join rewriter (USING PLACE), and the auto-registration
+             Spring Boot autoconfig — installed datasets under
+             \$HITORRO_DATASETS_HOME auto-register with this driver on
+             startup, and USING PLACE becomes real SQL on the /queries
+             endpoint.
+        -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-datasets</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
