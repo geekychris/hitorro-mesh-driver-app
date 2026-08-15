@@ -859,6 +859,8 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'datasets') refreshDatasets();
         if (target === 'pipelines') refreshPipelines();
         if (target === 'mesh') refreshMeshViz();
+        if (target === 'search') refreshSearchTab();
+        if (target === 'fleet') refreshFleetTab();
       } else if (btn.dataset.view) {
         $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
         $('#' + target, btn.closest('article')).classList.add('active');
@@ -1998,6 +2000,186 @@ function renderFacetsPanel(facets) {
         }).join('')}
       </div>
     </details>`;
+}
+
+// ================================================================ FLEET TAB
+
+let fleetTimer = null;
+
+async function refreshFleetTab() {
+  wireFleetHandlers();
+  await loadFleetServices();
+  if (fleetTimer) clearInterval(fleetTimer);
+  fleetTimer = setInterval(() => {
+    if (!$('#fleet').classList.contains('active')) return;
+    if (!$('#fleet-autorefresh').checked) return;
+    loadFleetServices();
+  }, 5000);
+}
+
+function wireFleetHandlers() {
+  const refresh = $('#fleet-refresh');
+  if (refresh && !refresh._wired) {
+    refresh._wired = true;
+    refresh.addEventListener('click', loadFleetServices);
+  }
+  ['fleet-log-close', 'fleet-manifest-close'].forEach(id => {
+    const b = $('#' + id);
+    if (b && !b._wired) { b._wired = true; b.addEventListener('click', () => b.closest('dialog').close()); }
+  });
+  const copy = $('#fleet-manifest-copy');
+  if (copy && !copy._wired) {
+    copy._wired = true;
+    copy.addEventListener('click', () => {
+      const text = $('#fleet-manifest-body').textContent;
+      navigator.clipboard.writeText(text).then(
+        () => plToast('Manifest copied', 'ok'),
+        () => plToast('Copy failed — select + Cmd/Ctrl-C', 'warn'));
+    });
+  }
+}
+
+async function loadFleetServices() {
+  let services = [];
+  try { services = await api('/mesh/fleet/services'); }
+  catch (e) {
+    $('#fleet-list').innerHTML = `<p style="color:var(--danger)">error: ${esc(e.message)}</p>`;
+    return;
+  }
+  $('#fleet-last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  if (!services.length) {
+    $('#fleet-list').innerHTML = '<p class="meta">No fleet members registered.</p>';
+    return;
+  }
+  $('#fleet-list').innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%; font-size:0.8rem;">
+        <thead>
+          <tr>
+            <th>Member</th>
+            <th>Port</th>
+            <th>Status</th>
+            <th>Managed PID / Uptime</th>
+            <th>Jar</th>
+            <th style="text-align:right; min-width: 21rem;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${services.map(fleetRowHtml).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  services.forEach(s => {
+    $(`#fleet-start-${s.name}`)?.addEventListener('click', () => fleetStart(s.name));
+    $(`#fleet-stop-${s.name}`)?.addEventListener('click', () => fleetStop(s.name));
+    $(`#fleet-logs-${s.name}`)?.addEventListener('click', () => fleetShowLogs(s.name));
+    $(`#fleet-k8s-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'k8s'));
+    $(`#fleet-orion-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'orion'));
+    $(`#fleet-local-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'local'));
+  });
+}
+
+function fleetRowHtml(s) {
+  const dot = s.alive
+    ? `<span title="responding at ${esc(s.healthPath)} (${s.probeMs}ms)"
+             style="color:var(--ins-color,#4c9); font-weight:bold;">● UP</span>`
+    : `<span title="no response on port ${s.defaultPort}${s.healthPath}"
+             style="color:var(--muted-color,#888);">○ down</span>`;
+  const managed = s.managedPid
+    ? `PID <code>${s.managedPid}</code> · ${fmtUptime(s.uptimeSec)}`
+    : `<small class="meta">not managed by driver</small>`;
+  const jar = s.jarFound
+    ? `<small class="meta" title="${esc(s.jarPath)}">${esc(shortPath(s.jarPath))}</small>`
+    : `<small style="color:var(--warn,#c93);">jar missing — build first</small>`;
+  const canStart = s.jarFound && !s.alive;
+  const canStop  = !!s.managedPid;
+  return `<tr>
+    <td><b>${esc(s.name)}</b><br><small class="meta">${esc(s.description || '')}</small></td>
+    <td><code>${s.defaultPort}</code></td>
+    <td>${dot}</td>
+    <td>${managed}</td>
+    <td>${jar}</td>
+    <td style="text-align:right; white-space:nowrap;">
+      <button id="fleet-start-${esc(s.name)}" ${canStart?'':'disabled'}
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;"
+              title="${canStart?'Spawn java -jar in the driver JVM':'Already up, or jar missing'}">▶ start</button>
+      <button id="fleet-stop-${esc(s.name)}" ${canStop?'':'disabled'} class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;"
+              title="Kill the process the driver spawned">■ stop</button>
+      <button id="fleet-logs-${esc(s.name)}" class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;">📜 logs</button>
+      <button id="fleet-local-${esc(s.name)}" class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;" title="Shell one-liner">$_ cli</button>
+      <button id="fleet-k8s-${esc(s.name)}" class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;">☸ k8s</button>
+      <button id="fleet-orion-${esc(s.name)}" class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;">⊛ orion</button>
+    </td>
+  </tr>`;
+}
+
+function shortPath(p) {
+  if (!p) return '';
+  const home = '/Users/' + (p.split('/Users/')[1] || '').split('/')[0];
+  return home && p.startsWith(home) ? '~' + p.slice(home.length) : p;
+}
+
+function fmtUptime(sec) {
+  if (sec == null) return '';
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's';
+  return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+}
+
+async function fleetStart(name) {
+  try {
+    const r = await api(`/mesh/fleet/services/${encodeURIComponent(name)}/start`, {method: 'POST'});
+    if (r.success) plToast(`Started ${name} (pid ${r.pid})`, 'ok');
+    else plToast(`Start failed: ${r.error || 'unknown'}`, 'warn');
+  } catch (e) { plToast(`Start error: ${e.message}`, 'warn'); }
+  setTimeout(loadFleetServices, 800);
+}
+
+async function fleetStop(name) {
+  try {
+    const r = await api(`/mesh/fleet/services/${encodeURIComponent(name)}/stop`, {method: 'POST'});
+    plToast(r.killed ? `Stopped ${name}` : `${name} was not managed by driver`, r.killed ? 'ok' : 'warn');
+  } catch (e) { plToast(`Stop error: ${e.message}`, 'warn'); }
+  setTimeout(loadFleetServices, 500);
+}
+
+async function fleetShowLogs(name) {
+  const dlg = $('#fleet-log-dialog');
+  $('#fleet-log-title').textContent = `Logs — ${name}`;
+  const body = $('#fleet-log-body');
+  body.textContent = 'loading…';
+  dlg.showModal();
+  const refresh = $('#fleet-log-refresh');
+  const load = async () => {
+    try {
+      const r = await api(`/mesh/fleet/services/${encodeURIComponent(name)}/logs?tail=200`);
+      body.textContent = (r.lines || []).join('\n') || '(empty)';
+      body.scrollTop = body.scrollHeight;
+    } catch (e) {
+      body.textContent = 'error: ' + e.message;
+    }
+  };
+  refresh.onclick = load;
+  load();
+}
+
+async function fleetShowManifest(name, target) {
+  const dlg = $('#fleet-manifest-dialog');
+  $('#fleet-manifest-title').textContent = `${target === 'local' ? 'Local launch command' :
+                                             target === 'orion' ? 'Orion manifest' : 'K8s manifest'} — ${name}`;
+  const body = $('#fleet-manifest-body');
+  body.textContent = 'loading…';
+  dlg.showModal();
+  try {
+    const url = `/mesh/fleet/services/${encodeURIComponent(name)}/manifest?target=${target}`;
+    const resp = await fetch(url);
+    body.textContent = await resp.text();
+  } catch (e) { body.textContent = 'error: ' + e.message; }
 }
 
 // ================================================================ MESH VIZ

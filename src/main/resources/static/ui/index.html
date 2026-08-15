@@ -39,6 +39,8 @@
             title="DAG pipelines — YAML jobs of source → steps → sinks. Also has a form-based builder.">Pipelines</button>
     <button role="tab" data-target="search"
             title="Full-text search over pipeline-indexed Lucene indexes.">Search</button>
+    <button role="tab" data-target="fleet"
+            title="Start / monitor hitorro-fleet Spring Boot services (retrieval, etc.) and grab K8s/Orion manifests.">Fleet</button>
     <button role="tab" data-target="playground"
             title="Write and run ad-hoc SQL against every registered table.">Playground</button>
     <button role="tab" data-target="stream"
@@ -797,6 +799,71 @@
         </small></p>
       </article>
     </article>
+  </section>
+
+  <!-- ================== FLEET ================== -->
+  <section id="fleet" class="tab-panel">
+    <article>
+      <header>
+        <span>hitorro-fleet services</span>
+        <small class="meta">
+          Spring Boot runtimes that deploy onto Orion mesh or Kubernetes alongside the mesh driver + agents.
+          The driver probes each member's default port for a live health check.
+        </small>
+      </header>
+      <div class="row" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
+        <button id="fleet-refresh" type="button" style="margin:0;padding:0.15rem 0.9rem;">↻ Refresh</button>
+        <small class="meta" id="fleet-last-refresh">not yet loaded</small>
+        <span style="flex:1"></span>
+        <label style="display:flex; align-items:center; gap:0.35rem;">
+          <input id="fleet-autorefresh" type="checkbox" checked/>
+          <small>auto-refresh every 5s</small>
+        </label>
+      </div>
+      <div id="fleet-list">loading…</div>
+
+      <details style="margin-top:0.8rem;">
+        <summary><small><b>What is this?</b></small></summary>
+        <div style="font-size:0.8rem; padding:0.4rem 0.6rem;">
+          <p><b>hitorro-fleet</b> is the umbrella for Spring Boot services that deploy onto Orion mesh or K8s alongside
+          the compute layer (mesh driver + agents). Fleet members are <b>not</b> pipeline stream-processing nodes — they
+          run as peer services (retrieval, others coming). This panel gives you:</p>
+          <ul style="margin:0.3rem 0 0.3rem 1.2rem; padding:0;">
+            <li><b>Live status</b> — probes each member's default port + health endpoint.</li>
+            <li><b>Local start/stop</b> — dev convenience; spawns <code>java -jar</code> on the driver machine and streams logs.</li>
+            <li><b>K8s Deployment+Service YAML</b> — ready to <code>kubectl apply</code>. Assumes an image and a ReadWriteMany PVC for shared pipelines-home.</li>
+            <li><b>Orion Service manifest</b> — matches the shape in <code>hitorro-mesh-orion/templates/</code>. Apply with <code>orion apply -f</code>.</li>
+            <li><b>Local launch command</b> — copy the exact <code>java -jar …</code> incantation for a shell.</li>
+          </ul>
+        </div>
+      </details>
+    </article>
+
+    <!-- Log viewer modal (hidden by default) -->
+    <dialog id="fleet-log-dialog" style="width:min(900px,95vw); max-height:80vh;">
+      <article>
+        <header style="display:flex; align-items:center; gap:0.5rem;">
+          <span><b id="fleet-log-title">Logs</b></span>
+          <span style="flex:1"></span>
+          <button id="fleet-log-refresh" style="margin:0;padding:0.15rem 0.9rem;">↻</button>
+          <button id="fleet-log-close" class="secondary outline" style="margin:0;padding:0.15rem 0.9rem;">Close</button>
+        </header>
+        <pre id="fleet-log-body" style="max-height:60vh; overflow:auto; font-size:0.72rem; line-height:1.2; margin:0;"></pre>
+      </article>
+    </dialog>
+
+    <!-- Manifest viewer modal (hidden by default) -->
+    <dialog id="fleet-manifest-dialog" style="width:min(900px,95vw); max-height:80vh;">
+      <article>
+        <header style="display:flex; align-items:center; gap:0.5rem;">
+          <span><b id="fleet-manifest-title">Manifest</b></span>
+          <span style="flex:1"></span>
+          <button id="fleet-manifest-copy" style="margin:0;padding:0.15rem 0.9rem;">📋 Copy</button>
+          <button id="fleet-manifest-close" class="secondary outline" style="margin:0;padding:0.15rem 0.9rem;">Close</button>
+        </header>
+        <pre id="fleet-manifest-body" style="max-height:60vh; overflow:auto; font-size:0.72rem; line-height:1.2; margin:0;"></pre>
+      </article>
+    </dialog>
   </section>
 
   <!-- ================== METRICS ================== -->
