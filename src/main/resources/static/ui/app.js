@@ -1773,6 +1773,7 @@ let meshVizTimer = null;
 // ================================================================ SEARCH TAB
 
 async function refreshSearchTab() {
+  wireSearchBackendToggle();
   await loadSearchIndexes();
   const runBtn = $('#search-run');
   if (runBtn && !runBtn._wired) {
@@ -1781,27 +1782,71 @@ async function refreshSearchTab() {
   }
 }
 
+function wireSearchBackendToggle() {
+  const sel = $('#search-backend');
+  if (!sel || sel._wired) return;
+  sel._wired = true;
+  const urlIn  = $('#search-fleet-url');
+  const urlLab = $('#search-fleet-url-label');
+  const hint   = $('#search-backend-hint');
+  const apply  = () => {
+    const isFleet = sel.value === 'fleet';
+    urlIn.hidden = urlLab.hidden = !isFleet;
+    if (isFleet) {
+      hint.innerHTML = `Calls <code>POST ${esc(urlIn.value)}/api/retrieval/execute</code> — full pipeline, aggregates + KV fallback.`;
+    } else {
+      hint.innerHTML = 'In-driver LuceneSearchService — lightweight, single index, no aggregates.';
+    }
+    loadSearchIndexes();
+  };
+  sel.addEventListener('change', apply);
+  urlIn.addEventListener('input', () => {
+    if (sel.value === 'fleet') hint.innerHTML =
+      `Calls <code>POST ${esc(urlIn.value)}/api/retrieval/execute</code>`;
+  });
+  apply();
+}
+
+function fleetBase() {
+  const sel = $('#search-backend');
+  if (!sel || sel.value !== 'fleet') return null;
+  return ($('#search-fleet-url').value || '').replace(/\/+$/, '');
+}
+
 async function loadSearchIndexes() {
+  const listEl = $('#search-index-list');
+  const countEl = $('#search-index-count');
+  const fleet = fleetBase();
   let indexes = [];
-  try { indexes = await api('/mesh/search'); }
-  catch (e) {
-    $('#search-index-list').innerHTML =
-        `<p><small style="color:var(--danger)">error: ${esc(e.message)}</small></p>`;
+  try {
+    if (fleet) {
+      // fleet-retrieval /api/retrieval/indexes returns [{name, path, typeName, open}, ...]
+      const resp = await fetch(`${fleet}/api/retrieval/indexes`, {mode: 'cors'});
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const arr = await resp.json();
+      indexes = arr.map(i => ({name: i.name, docCount: -1}));
+    } else {
+      indexes = await api('/mesh/search');
+    }
+  } catch (e) {
+    listEl.innerHTML =
+        `<p><small style="color:var(--danger)">error: ${esc(e.message)}</small>
+         ${fleet ? `<br><small class="meta">Is <code>${esc(fleet)}</code> reachable? Start hitorro-fleet-retrieval or point at another instance.</small>` : ''}</p>`;
+    if (countEl) countEl.textContent = '—';
     return;
   }
-  const countEl = $('#search-index-count');
   if (countEl) countEl.textContent = `${indexes.length} indexes`;
   if (!indexes.length) {
-    $('#search-index-list').innerHTML =
-        `<p class="meta">No Lucene indexes yet. Run a pipeline with a <code>lucene</code> sink first
-         (e.g. the bundled <b>enrich-and-index</b> example).</p>`;
+    listEl.innerHTML =
+        `<p class="meta">No indexes yet. Run a pipeline with a <code>lucene</code> sink first
+         (e.g. the bundled <b>enrich-and-index</b> example)${fleet ? ` — or ingest via <code>POST ${esc(fleet)}/api/ingest/indexes/&lt;name&gt;/documents</code>` : ''}.</p>`;
     return;
   }
-  $('#search-index-list').innerHTML = indexes.map(i => `
+  listEl.innerHTML = indexes.map(i => `
     <div class="ds-list-item" data-name="${esc(i.name)}"
-         title="${i.docCount >= 0 ? i.docCount + ' documents indexed' : 'index metadata unreadable'}">
+         title="${i.docCount >= 0 ? i.docCount + ' documents indexed' : 'click to load into query'}">
       <div class="name">${esc(i.name)}</div>
-      <span class="meta">${i.docCount >= 0 ? i.docCount + ' docs' : '(?)'}</span>
+      <span class="meta">${i.docCount >= 0 ? i.docCount + ' docs' : ''}</span>
     </div>
   `).join('');
   $$('#search-index-list .ds-list-item').forEach(el => {
@@ -1822,10 +1867,24 @@ async function runSearch() {
   const runBtn = $('#search-run');
   runBtn.disabled = true;
   runBtn.textContent = '⋯ Searching';
+  const fleet = fleetBase();
   try {
-    const url = `/mesh/search/${encodeURIComponent(idx)}?q=${encodeURIComponent(q)}&limit=${lim}`;
-    const r = await api(url);
-    renderSearchResult(r);
+    if (fleet) {
+      const body = {
+        indexName: idx,
+        query: {search: {query: q || '*:*', limit: lim, facets: []}}
+      };
+      const resp = await fetch(`${fleet}/api/retrieval/execute`, {
+        method: 'POST', mode: 'cors',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      renderFleetResult(await resp.json(), q);
+    } else {
+      const url = `/mesh/search/${encodeURIComponent(idx)}?q=${encodeURIComponent(q)}&limit=${lim}`;
+      renderSearchResult(await api(url));
+    }
   } catch (e) {
     $('#search-result').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   } finally {
@@ -1861,6 +1920,84 @@ function renderSearchResult(r) {
         </tbody>
       </table>
     </div>`;
+}
+
+function renderFleetResult(r, queryText) {
+  const host = $('#search-result');
+  if (!host) return;
+  if (!r.success) {
+    host.innerHTML = `<p style="color:var(--danger)">${esc(r.error || 'unknown error')}</p>`;
+    return;
+  }
+  const docs = r.documents || [];
+  const cols = Array.from(new Set(docs.flatMap(d => Object.keys(d))));
+
+  // Aggregates: SearchSummary emits {_aggregate:"summary", ...}; Facet: {_aggregate:"facet", ...}; Summarization: {_aggregate:"summarization", ...}
+  const aggs = r.aggregates || [];
+  const aggHtml = aggs.length ? `
+    <details class="ret-agg" open style="margin-bottom:0.5rem;">
+      <summary><b>${aggs.length}</b> aggregate${aggs.length===1?'':'s'} — SearchSummary / Facet / Summarization</summary>
+      <div style="padding:0.4rem 0.6rem;">
+        ${aggs.map(a => `<pre style="margin:0 0 0.4rem 0; font-size:0.7rem; white-space:pre-wrap; word-break:break-word;">${esc(JSON.stringify(a, null, 2))}</pre>`).join('')}
+      </div>
+    </details>` : '';
+
+  const facetsHtml = r.facets ? renderFacetsPanel(r.facets) : '';
+
+  const stagesHtml = r.stagesUsed && r.stagesUsed.length
+    ? `<small class="meta">Stages: ${r.stagesUsed.map(s => `<code>${esc(s)}</code>`).join(' → ')}</small>` : '';
+  const ctxHtml = r.contextAttributes ? Object.entries(r.contextAttributes)
+      .map(([k,v]) => `<code>${esc(k)}=${esc(String(v))}</code>`).join(' · ') : '';
+
+  host.innerHTML = `
+    <div class="meta" style="margin-bottom: 0.4rem;">
+      <b>${docs.length}</b> docs · totalHits <b>${r.totalHits ?? '?'}</b> · ${r.searchTimeMs ?? '?'} ms search · ${r.totalTimeMs ?? '?'} ms wall
+      · query <code>${esc(queryText || '*:*')}</code>
+    </div>
+    ${stagesHtml}
+    ${ctxHtml ? `<div class="meta" style="margin:0.2rem 0 0.4rem 0;">${ctxHtml}</div>` : ''}
+    ${aggHtml}
+    ${facetsHtml}
+    ${docs.length ? `
+      <div style="overflow-x: auto; max-height: 500px; overflow-y: auto;">
+        <table style="width:100%; font-size: 0.75rem;">
+          <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+          <tbody>${docs.map(d => `
+            <tr>${cols.map(c => {
+              const v = d[c];
+              if (v == null) return '<td class="meta">—</td>';
+              const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+              return `<td>${esc(s.length > 80 ? s.slice(0, 77) + '…' : s)}</td>`;
+            }).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '<p class="meta">No documents returned.</p>'}
+    ${r.errors && r.errors.length ? `
+      <div style="margin-top:0.5rem; color:var(--danger); font-size:0.75rem;">
+        ${r.errors.map(e => `<div>${esc(e)}</div>`).join('')}
+      </div>` : ''}`;
+}
+
+function renderFacetsPanel(facets) {
+  const keys = Object.keys(facets || {});
+  if (!keys.length) return '';
+  return `
+    <details class="ret-facets" open style="margin-bottom:0.5rem;">
+      <summary><b>${keys.length}</b> facet${keys.length===1?'':'s'}</summary>
+      <div style="padding:0.4rem 0.6rem; display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:0.5rem;">
+        ${keys.map(k => {
+          const f = facets[k];
+          const vals = (f.values || []).slice(0, 12);
+          return `<div style="border:1px solid var(--muted-border-color,#e0e0e0); border-radius:4px; padding:0.35rem 0.5rem;">
+            <div><b>${esc(k)}</b> <small class="meta">${f.totalCount ?? 0}</small></div>
+            <ul style="margin:0.2rem 0 0 0.9rem; padding:0; font-size:0.75rem;">
+              ${vals.map(v => `<li>${esc(v.value)} <small class="meta">(${v.count})</small></li>`).join('')}
+              ${(f.values||[]).length > vals.length ? `<li class="meta">… ${(f.values||[]).length - vals.length} more</li>` : ''}
+            </ul>
+          </div>`;
+        }).join('')}
+      </div>
+    </details>`;
 }
 
 // ================================================================ MESH VIZ
