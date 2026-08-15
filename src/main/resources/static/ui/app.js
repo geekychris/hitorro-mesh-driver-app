@@ -1773,11 +1773,13 @@ let meshVizTimer = null;
 async function refreshMeshViz() {
   await drawMeshViz();
   if (meshVizTimer) clearInterval(meshVizTimer);
+  // 1s cadence so brief pipeline runs (they finish in <500ms on the
+  // driver JVM) still register at least once with the "recent activity"
+  // fade-out logic in drawMeshViz.
   meshVizTimer = setInterval(() => {
-    // Stop refreshing when the tab isn't active — cheap and polite.
     if (!$('#mesh').classList.contains('active')) return;
     drawMeshViz();
-  }, 2000);
+  }, 1000);
 }
 
 async function drawMeshViz() {
@@ -1813,13 +1815,30 @@ async function drawMeshViz() {
   const PADDING     = 20;
   const GAP_TB      = 90;
 
-  const runningJobs = (jobs || []).filter(j => j.state === 'RUNNING');
+  // Show every RUNNING pipeline plus anything that finished in the last
+  // 30s — otherwise Phase-1 jobs (which complete on the driver JVM in
+  // well under a second) are invisible by the time a user tabs over.
+  const now = Date.now();
+  const RECENT_MS = 30_000;
+  const activeJobs = (jobs || []).filter(j => {
+    if (j.state === 'RUNNING') return true;
+    if (j.finishedAt) {
+      const end = Date.parse(j.finishedAt);
+      if (!isNaN(end) && now - end < RECENT_MS) return true;
+    }
+    return false;
+  });
+  const runningJobs = activeJobs.filter(j => j.state === 'RUNNING');
   const runningNodesByAgent = {};
-  runningJobs.forEach(j => {
-    (j.nodes || []).filter(n => n.state === 'RUNNING').forEach(n => {
+  activeJobs.forEach(j => {
+    (j.nodes || []).forEach(n => {
       const key = n.assignedAgent || '__driver__';
+      const isRunning = j.state === 'RUNNING' && n.state === 'RUNNING';
+      const isRecent  = j.state !== 'RUNNING';
+      if (!isRunning && !isRecent) return;
       (runningNodesByAgent[key] = runningNodesByAgent[key] || [])
-          .push({ jobId: j.jobId, jobName: j.jobSpecName, ...n });
+          .push({ jobId: j.jobId, jobName: j.jobSpecName,
+                  jobState: j.state, ...n });
     });
   });
 
@@ -1870,7 +1889,7 @@ async function drawMeshViz() {
       <text class="mesh-title" x="${driverW/2}" y="26" text-anchor="middle">DRIVER</text>
       <text class="mesh-sub"   x="${driverW/2}" y="46" text-anchor="middle">planner · dispatcher · result collector</text>
       <text class="mesh-sub"   x="${driverW/2}" y="64" text-anchor="middle">
-        uptime ${Math.floor((topo.driver?.uptimeMs || 0) / 1000)}s · pipelines: ${runningJobs.length} running
+        uptime ${Math.floor((topo.driver?.uptimeMs || 0) / 1000)}s · pipelines: ${runningJobs.length} running · ${activeJobs.length - runningJobs.length} recent
       </text>
       <text class="mesh-sub"   x="${driverW/2}" y="82" text-anchor="middle">
         ${broadcasts.length} broadcasts · ${(topo.distributed || []).length} distributed tables · hover for details
@@ -1969,23 +1988,48 @@ async function drawMeshViz() {
     `;
   });
 
-  // Driver-hosted pipeline strip.
+  // Driver-hosted pipeline strip. Shows RUNNING nodes AND recently-
+  // completed ones (last 30s) — Phase-1 jobs finish in <500ms so
+  // "RUNNING only" is invisible by the time users tab over.
   const driverJobs = runningNodesByAgent['__driver__'] || [];
   if (driverJobs.length) {
-    const stripW = 260;
+    const stripW = 300;
+    const stripH = Math.min(200, driverJobs.length * (CARD_H + CARD_GAP) + 30);
     body += `
       <g class="mesh-driver-jobs" transform="translate(${W - stripW - PADDING}, ${PADDING})">
-        <rect width="${stripW}" height="${Math.min(120, driverJobs.length * (CARD_H + CARD_GAP) + 24)}"
+        <rect width="${stripW}" height="${stripH}"
               class="mesh-box mesh-driver-jobs-box" rx="6"/>
-        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM (Phase 1)</text>
-        ${driverJobs.map((n, i) => `
-          <g class="mesh-card mesh-pipeline mesh-pulse mesh-hoverable" transform="translate(6, ${24 + i * (CARD_H + CARD_GAP)})"
-             data-info-title="Running on driver: ${esc(n.id)}"
-             data-info-desc="Pipeline node from job '${esc(n.jobName)}' executing in the driver JVM (not distributed). ${n.rowsOut||0} rows so far. When Phase-2 PipelineScheduler + agents with pipeline-node capability are wired up, these move onto agent columns.">
+        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM · recent activity</text>
+        <text x="8" y="30" class="mesh-sub" style="font-size:0.65rem;">RUNNING + last 30 s · fades on completion</text>
+        ${driverJobs.map((n, i) => {
+          const stateClass = n.jobState === 'RUNNING' ? 'mesh-pulse'
+                           : n.jobState === 'FAILED'  ? 'mesh-node-failed'
+                           : 'mesh-node-succeeded';
+          const marker = n.jobState === 'RUNNING' ? '▶' : n.jobState === 'FAILED' ? '✕' : '✓';
+          return `
+          <g class="mesh-card mesh-pipeline ${stateClass} mesh-hoverable"
+             transform="translate(6, ${38 + i * (CARD_H + CARD_GAP)})"
+             data-info-title="${esc(n.jobState)}: ${esc(n.id)}"
+             data-info-desc="Pipeline node '${esc(n.id)}' from job '${esc(n.jobName)}' — executed in the driver JVM (Phase 1 - not distributed). ${n.jobState === 'RUNNING' ? 'Currently emitting rows' : 'Completed ' + (n.rowsOut||0) + ' rows'}. When agents advertise pipeline-node capability the Phase-2 scheduler moves these onto agent columns.">
             <rect width="${stripW - 12}" height="${CARD_H}" rx="4"/>
-            <text x="10" y="${CARD_H/2 + 4}">▶ ${esc(n.jobName)} · ${esc(n.id)}</text>
+            <text x="10" y="${CARD_H/2 + 4}">${marker} ${esc(n.jobName)} · ${esc(n.id)} · ${n.rowsOut||0} rows</text>
           </g>
-        `).join('')}
+        `;}).join('')}
+      </g>
+    `;
+  } else {
+    // Empty-state hint so users know where to look when nothing is
+    // running.
+    body += `
+      <g transform="translate(${W - 300 - PADDING}, ${PADDING})">
+        <rect width="300" height="60" class="mesh-box" rx="6" style="fill:#fafafa;"/>
+        <text x="12" y="20" class="mesh-sub" font-weight="600">on driver JVM · recent activity</text>
+        <text x="12" y="38" class="mesh-sub" style="font-size:0.7rem;">
+          no pipeline activity in last 30 s
+        </text>
+        <text x="12" y="52" class="mesh-sub" style="font-size:0.7rem;">
+          run one from the Pipelines tab · it appears here
+        </text>
       </g>
     `;
   }

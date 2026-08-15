@@ -737,6 +737,15 @@ table.result th.row-num-header {
 #mesh-viz .mesh-card.mesh-pipeline-cap rect { fill: #f3e5f5; stroke: #8e44ad; }
 #mesh-viz .mesh-card.mesh-pipeline rect { fill: #fffbf0; stroke: var(--warning); stroke-width: 1.5; }
 #mesh-viz .mesh-card.mesh-pipeline text { fill: #8a5a00; font-weight: 600; }
+#mesh-viz .mesh-card.mesh-node-succeeded rect { fill: #e5f5ea; stroke: var(--success); animation: mesh-fade 5s ease-in-out; }
+#mesh-viz .mesh-card.mesh-node-succeeded text { fill: var(--success); }
+#mesh-viz .mesh-card.mesh-node-failed rect { fill: #fce4e4; stroke: var(--danger); }
+#mesh-viz .mesh-card.mesh-node-failed text { fill: var(--danger); }
+@keyframes mesh-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0.5; }
+}
 #mesh-viz .mesh-card.mesh-sql rect     { fill: #eaf3f8; stroke: var(--primary-mesh); }
 #mesh-viz .mesh-card.mesh-task rect    { fill: #f6f8fb; stroke: #7f8c8d; }
 #mesh-viz .mesh-card.mesh-nats rect    { fill: #fdf5e6; stroke: #d4a017; }
