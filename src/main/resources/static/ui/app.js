@@ -1897,11 +1897,15 @@ async function loadSearchIndexes() {
   let indexes = [];
   try {
     if (fleet) {
-      // fleet-retrieval /api/retrieval/indexes returns [{name, path, typeName, open}, ...]
+      // fleet-retrieval /api/retrieval/indexes now returns docCount + lastModifiedMs
       const resp = await fetch(`${fleet}/api/retrieval/indexes`, {mode: 'cors'});
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const arr = await resp.json();
-      indexes = arr.map(i => ({name: i.name, docCount: -1}));
+      indexes = arr.map(i => ({
+        name: i.name,
+        docCount: (typeof i.docCount === 'number') ? i.docCount : -1,
+        lastModifiedMs: i.lastModifiedMs,
+      }));
     } else {
       indexes = await api('/mesh/search');
     }
@@ -1919,13 +1923,21 @@ async function loadSearchIndexes() {
          (e.g. the bundled <b>enrich-and-index</b> example)${fleet ? ` — or ingest via <code>POST ${esc(fleet)}/api/ingest/indexes/&lt;name&gt;/documents</code>` : ''}.</p>`;
     return;
   }
-  listEl.innerHTML = indexes.map(i => `
+  const nowMs = Date.now();
+  listEl.innerHTML = indexes.map(i => {
+    const ageMs = i.lastModifiedMs ? (nowMs - i.lastModifiedMs) : null;
+    const fresh = ageMs != null && ageMs < 10_000;   // written in the last 10s
+    const recent = ageMs != null && ageMs < 60_000;  // written in the last minute
+    const dot = fresh ? '<span title="written in the last 10s" style="color:var(--ins-color,#4c9);">●</span> '
+              : recent ? '<span title="written in the last 60s" style="color:#c9a;">●</span> '
+              : '';
+    return `
     <div class="ds-list-item" data-name="${esc(i.name)}"
-         title="${i.docCount >= 0 ? i.docCount + ' documents indexed' : 'click to load into query'}">
-      <div class="name">${esc(i.name)}</div>
-      <span class="meta">${i.docCount >= 0 ? i.docCount + ' docs' : ''}</span>
-    </div>
-  `).join('');
+         title="${i.docCount >= 0 ? i.docCount + ' documents' : ''}${ageMs != null ? ' · updated ' + fmtAge(ageMs) : ''} · click to load into query">
+      <div class="name">${dot}${esc(i.name)}</div>
+      <span class="meta">${i.docCount >= 0 ? i.docCount + ' docs' : ''}${ageMs != null ? ' · ' + fmtAge(ageMs) : ''}</span>
+    </div>`;
+  }).join('');
   $$('#search-index-list .ds-list-item').forEach(el => {
     el.addEventListener('click', () => {
       $$('#search-index-list .ds-list-item').forEach(x => x.classList.remove('active'));
@@ -2266,6 +2278,14 @@ function fleetShowDebug(dbg, name) {
     `For K8s: kubectl port-forward svc/hitorro-${name} ${dbg.port}:${dbg.port}\n` +
     `For Orion: orion port-forward svc/hitorro-${name} ${dbg.port}:${dbg.port}\n`;
   dlg.showModal();
+}
+
+function fmtAge(ms) {
+  if (ms < 1000) return 'just now';
+  if (ms < 60_000) return Math.floor(ms/1000) + 's ago';
+  if (ms < 3_600_000) return Math.floor(ms/60_000) + 'm ago';
+  if (ms < 86_400_000) return Math.floor(ms/3_600_000) + 'h ago';
+  return Math.floor(ms/86_400_000) + 'd ago';
 }
 
 function shortPath(p) {
