@@ -618,8 +618,13 @@
                   title="Open a form-based YAML composer — pick source, add steps, tick sinks; generates YAML into the editor."
                   style="margin:0 0.4rem 0 0; padding:0.15rem 0.7rem;">🧱 Builder</button>
           <button id="pl-run" type="button"
-                  title="Submit the YAML below as a job to the driver. If the editor is empty, the first bundled example loads automatically."
-                  style="margin:0;padding:0.15rem 0.9rem;">▶ Run</button>
+                  title="Local Run — pipeline executes IN the driver JVM (Phase 1). Simplest path; use this for quick tests. Auto-loads a bundled example if the editor is empty."
+                  style="margin:0 0.4rem 0 0; padding:0.15rem 0.9rem;">▶ Run</button>
+          <button id="pl-run-dist" type="button" class="secondary"
+                  title="Distributed Run — the driver's PipelineScheduler dispatches each node to a mesh agent advertising the pipeline-node capability. Nodes run ON the agents (parallel across hosts) instead of on the driver."
+                  style="margin:0;padding:0.15rem 0.9rem; background: var(--accent-mesh); border-color: var(--accent-mesh);">
+            ▶ Run distributed
+          </button>
         </header>
 
         <!-- Form-based builder — hidden until toggled. Emits YAML into the

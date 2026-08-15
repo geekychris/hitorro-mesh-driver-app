@@ -2397,54 +2397,60 @@ function plToast(msg, kind = 'ok') {
 
 document.addEventListener('DOMContentLoaded', () => {
   const runBtn = $('#pl-run');
+  const runDistBtn = $('#pl-run-dist');
   if (!runBtn) return;
-  runBtn.addEventListener('click', async () => {
-    let yaml = $('#pl-yaml').value.trim();
-    // Auto-recover if the editor is empty — load the first bundled
-    // example so the button always does SOMETHING visible.
-    if (!yaml && plBundledCache && Object.keys(plBundledCache).length) {
-      const firstName = Object.keys(plBundledCache)[0];
-      yaml = plBundledCache[firstName];
-      $('#pl-yaml').value = yaml;
-      plToast(`auto-loaded "${firstName}" example — click Run again if you want a different one`, 'warn');
-    }
-    if (!yaml) {
-      plToast('editor is empty — click a bundled example on the left first', 'warn');
-      return;
-    }
-    runBtn.disabled = true;
-    runBtn.textContent = '⋯ Running';
-    // Very visible in-panel status so users never wonder "did it fire?"
-    $('#pl-status').hidden = false;
-    $('#pl-status-id').textContent = 'submitting…';
-    $('#pl-status-state').textContent = 'SUBMITTING';
-    $('#pl-status-state').className = 'badge pl-state-running';
-    $('#pl-dag').innerHTML = '<div class="meta">contacting driver…</div>';
-    $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    try {
-      const r = await api('/mesh/jobs/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/yaml' },
-        body: yaml,
-      });
-      $('#pl-status-id').textContent = r.jobId;
-      $('#pl-status-state').textContent = 'RUNNING';
-      $('#pl-status-state').className = 'badge pl-state-running';
-      startPolling(r.jobId);
-      plToast(`▶ started job ${r.jobId}`, 'ok');
-      refreshRunHistory();
-    } catch (e) {
-      $('#pl-status-id').textContent = 'error';
-      $('#pl-status-state').textContent = 'FAILED';
-      $('#pl-status-state').className = 'badge pl-state-failed';
-      $('#pl-dag').innerHTML = `<div style="color:var(--danger); padding:0.5rem;">${esc(e.message)}</div>`;
-      plToast('run failed: ' + e.message, 'err');
-    } finally {
-      runBtn.disabled = false;
-      runBtn.textContent = '▶ Run';
-    }
-  });
+  runBtn.addEventListener('click', () => submitRun('/mesh/jobs/run', runBtn, '▶ Run', 'local'));
+  if (runDistBtn) {
+    runDistBtn.addEventListener('click',
+        () => submitRun('/mesh/jobs/run-distributed', runDistBtn, '▶ Run distributed', 'distributed'));
+  }
 });
+
+async function submitRun(endpoint, btn, label, mode) {
+  let yaml = $('#pl-yaml').value.trim();
+  if (!yaml && plBundledCache && Object.keys(plBundledCache).length) {
+    const firstName = Object.keys(plBundledCache)[0];
+    yaml = plBundledCache[firstName];
+    $('#pl-yaml').value = yaml;
+    plToast(`auto-loaded "${firstName}" example — click again if you want a different one`, 'warn');
+  }
+  if (!yaml) {
+    plToast('editor is empty — click a bundled example on the left first', 'warn');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⋯ ' + (mode === 'distributed' ? 'Dispatching' : 'Running');
+  $('#pl-status').hidden = false;
+  $('#pl-status-id').textContent = 'submitting…';
+  $('#pl-status-state').textContent = 'SUBMITTING';
+  $('#pl-status-state').className = 'badge pl-state-running';
+  $('#pl-dag').innerHTML = `<div class="meta">${mode === 'distributed'
+      ? 'dispatching to agents advertising pipeline-node capability…'
+      : 'contacting driver…'}</div>`;
+  $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    const r = await api(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/yaml' },
+      body: yaml,
+    });
+    $('#pl-status-id').textContent = r.jobId;
+    $('#pl-status-state').textContent = 'RUNNING';
+    $('#pl-status-state').className = 'badge pl-state-running';
+    startPolling(r.jobId);
+    plToast(`▶ started job ${r.jobId} (${mode})`, 'ok');
+    refreshRunHistory();
+  } catch (e) {
+    $('#pl-status-id').textContent = 'error';
+    $('#pl-status-state').textContent = 'FAILED';
+    $('#pl-status-state').className = 'badge pl-state-failed';
+    $('#pl-dag').innerHTML = `<div style="color:var(--danger); padding:0.5rem;">${esc(e.message)}</div>`;
+    plToast(`${mode} run failed: ${e.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
 
 function startPolling(jobId) {
   if (plActivePoll) clearInterval(plActivePoll);
