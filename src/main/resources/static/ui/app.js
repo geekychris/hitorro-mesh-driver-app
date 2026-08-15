@@ -2317,7 +2317,11 @@ function plToast(msg, kind = 'ok') {
   el._timer = setTimeout(() => el.classList.remove('pl-toast-visible'), 3000);
 }
 
-$(document).body?.addEventListener?.('click', () => { }); // no-op
+// (removed a stray $(document).body?... line — $ is querySelector, so
+// passing document as the CSS selector threw TypeError at load time and
+// silently killed every DOMContentLoaded handler that followed. That is
+// exactly what caused the "Run does nothing / bundled examples don't
+// click" bug reports — the handler wire-up never registered.)
 
 document.addEventListener('DOMContentLoaded', () => {
   const runBtn = $('#pl-run');
