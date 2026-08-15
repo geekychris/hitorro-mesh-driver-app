@@ -525,10 +525,51 @@
 
   <!-- ================== MESH ================== -->
   <section id="mesh" class="tab-panel">
+    <article style="background:#fbfcfe;">
+      <header style="cursor:pointer;" onclick="this.nextElementSibling.hidden = !this.nextElementSibling.hidden;">
+        <span>❓ How things actually run — click to expand</span>
+        <small class="meta">answers "where does my pipeline execute?"</small>
+      </header>
+      <div hidden style="font-size: 0.9rem; line-height: 1.5;">
+        <p><b>Two independent runtimes coexist here.</b></p>
+
+        <p><b>1. SQL queries</b> — you type SQL in the Playground or via
+        <code>POST /mesh/queries</code>. The <b>driver</b> plans the query and
+        splits it into partial-SQL tasks. Each task goes to one of the
+        <b>agent</b> processes that hold the relevant partition (edge:
+        <code>partition:docs:us</code> → <code>agent-us</code>). Rows stream back
+        to the driver over NATS. This is the distributed part.</p>
+
+        <p><b>2. Pipelines</b> — you submit a job spec via
+        <code>POST /mesh/jobs/run</code>. In Phase 1 (right now) the
+        <b>driver's own JobRunner</b> executes every node <i>in-process</i>. The
+        agents are <b>not involved</b>. You'll see your pipeline show up in the
+        big amber "Pipelines running in the driver JVM" panel below the driver
+        box — that's where they live.</p>
+
+        <p><b>To distribute pipelines to agents (Phase 2)</b> you need to:</p>
+        <ol style="margin-left:1.5rem;">
+          <li>Install <code>hitorro-mesh-agent-pipelines</code> on an agent
+              (adds the <code>pipeline-node</code> capability).</li>
+          <li>Set <code>hitorro.mesh.pipelines.enabled=true</code> in that agent's
+              config.</li>
+          <li>Submit via <code>POST /mesh/jobs/run-distributed</code> instead of
+              <code>/run</code>. The driver's <code>PipelineScheduler</code>
+              then round-robins nodes across agents advertising the capability;
+              they'll appear as pulsing pills inside the agent columns below.</li>
+        </ol>
+
+        <p><b>Persistent sinks</b> (kvstore, lucene) write files under
+        <code>~/.hitorro/pipelines/{kv,lucene}/&lt;name&gt;/</code>. A subsequent
+        job with <code>source: {kind: kvstore, name: X}</code> reads the same
+        files back — that's how pipelines compose.</p>
+      </div>
+    </article>
+
     <article>
       <header>
         <span>Cluster topology</span>
-        <small class="meta">live · auto-refresh 2 s · hover any element for details</small>
+        <small class="meta">live · auto-refresh 1 s · hover any element for details</small>
       </header>
       <div id="mesh-viz-wrapper" style="overflow-x: auto; position: relative;">
         <svg id="mesh-viz" width="100%" height="640" style="min-width: 900px;">

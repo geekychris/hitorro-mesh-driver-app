@@ -1813,7 +1813,9 @@ async function drawMeshViz() {
   const CARD_H      = 30;
   const CARD_GAP    = 5;
   const PADDING     = 20;
-  const GAP_TB      = 90;
+  // Vertical gap between driver + agent row grows so the pipelines-on-
+  // driver panel fits between them without overlapping.
+  const GAP_TB      = 260;
 
   // Show every RUNNING pipeline plus anything that finished in the last
   // 30s — otherwise Phase-1 jobs (which complete on the driver JVM in
@@ -1988,48 +1990,74 @@ async function drawMeshViz() {
     `;
   });
 
-  // Driver-hosted pipeline strip. Shows RUNNING nodes AND recently-
-  // completed ones (last 30s) — Phase-1 jobs finish in <500ms so
-  // "RUNNING only" is invisible by the time users tab over.
+  // ---- Pipelines-on-driver panel — big, centered under the driver box,
+  // between it and the agent row. Shows the "you started a pipeline; it's
+  // running HERE on the driver JVM" story explicitly. Grows with content;
+  // stays visible with empty-state hint so users know where to look.
   const driverJobs = runningNodesByAgent['__driver__'] || [];
+  const pipelinePanelW = Math.min(W - 2 * PADDING, 720);
+  const pipelinePanelX = (W - pipelinePanelW) / 2;
+  const pipelinePanelY = PADDING + DRIVER_H + 44;   // just under the broadcast label
+  const pipelineRowH   = 28;
+  const pipelinePanelH = Math.max(70, 40 + Math.max(1, driverJobs.length) * (pipelineRowH + 4) + (driverJobs.length ? 0 : 6));
+  body += `
+    <g class="mesh-hoverable" transform="translate(${pipelinePanelX}, ${pipelinePanelY})"
+       data-info-title="Pipelines on the driver JVM (Phase 1)"
+       data-info-desc="Every pipeline you submit via /mesh/jobs/run runs INSIDE the driver process here — not on the agents. The agents only serve SQL tasks (see the columns below). To distribute pipelines across agents you need to install hitorro-mesh-agent-pipelines on at least one agent and use /mesh/jobs/run-distributed. This panel shows every pipeline that is currently RUNNING plus anything that finished in the last 30 seconds.">
+      <rect width="${pipelinePanelW}" height="${pipelinePanelH}" rx="8"
+            class="mesh-box mesh-pipeline-panel ${driverJobs.length ? 'has-activity' : ''}"/>
+      <text x="12" y="20" class="mesh-title" style="font-size: 0.85rem;">
+        ⚙ Pipelines running in the driver JVM
+      </text>
+      <text x="12" y="36" class="mesh-sub" style="font-size:0.7rem;">
+        Phase 1 · pipeline nodes execute here, not on agents · 30-s recent-activity window
+      </text>
+  `;
   if (driverJobs.length) {
-    const stripW = 300;
-    const stripH = Math.min(200, driverJobs.length * (CARD_H + CARD_GAP) + 30);
-    body += `
-      <g class="mesh-driver-jobs" transform="translate(${W - stripW - PADDING}, ${PADDING})">
-        <rect width="${stripW}" height="${stripH}"
-              class="mesh-box mesh-driver-jobs-box" rx="6"/>
-        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM · recent activity</text>
-        <text x="8" y="30" class="mesh-sub" style="font-size:0.65rem;">RUNNING + last 30 s · fades on completion</text>
-        ${driverJobs.map((n, i) => {
-          const stateClass = n.jobState === 'RUNNING' ? 'mesh-pulse'
-                           : n.jobState === 'FAILED'  ? 'mesh-node-failed'
-                           : 'mesh-node-succeeded';
-          const marker = n.jobState === 'RUNNING' ? '▶' : n.jobState === 'FAILED' ? '✕' : '✓';
-          return `
-          <g class="mesh-card mesh-pipeline ${stateClass} mesh-hoverable"
-             transform="translate(6, ${38 + i * (CARD_H + CARD_GAP)})"
-             data-info-title="${esc(n.jobState)}: ${esc(n.id)}"
-             data-info-desc="Pipeline node '${esc(n.id)}' from job '${esc(n.jobName)}' — executed in the driver JVM (Phase 1 - not distributed). ${n.jobState === 'RUNNING' ? 'Currently emitting rows' : 'Completed ' + (n.rowsOut||0) + ' rows'}. When agents advertise pipeline-node capability the Phase-2 scheduler moves these onto agent columns.">
-            <rect width="${stripW - 12}" height="${CARD_H}" rx="4"/>
-            <text x="10" y="${CARD_H/2 + 4}">${marker} ${esc(n.jobName)} · ${esc(n.id)} · ${n.rowsOut||0} rows</text>
-          </g>
-        `;}).join('')}
-      </g>
-    `;
+    driverJobs.forEach((n, i) => {
+      const rowY = 44 + i * (pipelineRowH + 4);
+      const stateClass = n.jobState === 'RUNNING' ? 'mesh-pulse'
+                       : n.jobState === 'FAILED'  ? 'mesh-node-failed'
+                       : 'mesh-node-succeeded';
+      const marker = n.jobState === 'RUNNING' ? '▶' : n.jobState === 'FAILED' ? '✕' : '✓';
+      body += `
+        <g class="mesh-card mesh-pipeline ${stateClass} mesh-hoverable"
+           transform="translate(8, ${rowY})"
+           data-info-title="${esc(n.jobState)}: ${esc(n.id)}"
+           data-info-desc="Pipeline node '${esc(n.id)}' from job '${esc(n.jobName)}' — executed in the driver JVM. ${n.jobState === 'RUNNING' ? 'Currently emitting rows' : 'Completed ' + (n.rowsOut||0) + ' rows'}. When agents advertise pipeline-node capability the Phase-2 scheduler moves these onto agent columns.">
+          <rect width="${pipelinePanelW - 16}" height="${pipelineRowH}" rx="4"/>
+          <text x="12" y="${pipelineRowH/2 + 4}" style="font-size:0.78rem;">
+            ${marker} ${esc(n.jobName)} · node "${esc(n.id)}" · ${n.rowsOut||0} rows ${n.jobState === 'RUNNING' ? '(running)' : n.jobState === 'FAILED' ? '(failed)' : '(finished)'}
+          </text>
+        </g>
+      `;
+    });
   } else {
-    // Empty-state hint so users know where to look when nothing is
-    // running.
     body += `
-      <g transform="translate(${W - 300 - PADDING}, ${PADDING})">
-        <rect width="300" height="60" class="mesh-box" rx="6" style="fill:#fafafa;"/>
-        <text x="12" y="20" class="mesh-sub" font-weight="600">on driver JVM · recent activity</text>
-        <text x="12" y="38" class="mesh-sub" style="font-size:0.7rem;">
-          no pipeline activity in last 30 s
-        </text>
-        <text x="12" y="52" class="mesh-sub" style="font-size:0.7rem;">
-          run one from the Pipelines tab · it appears here
-        </text>
+      <text x="12" y="60" class="mesh-sub" style="font-size:0.72rem; fill:var(--muted);">
+        no pipeline activity in last 30 s · run one from the Pipelines tab and switch back here
+      </text>
+    `;
+  }
+  body += `</g>`;
+
+  // Client → driver dashed line when there's live activity — makes the
+  // "you submitted from a browser and it landed on the driver JVM" flow
+  // visible. Only render when at least one pipeline is on the panel.
+  if (driverJobs.length) {
+    const clientY = pipelinePanelY + pipelinePanelH / 2;
+    const clientCircleX = pipelinePanelX - 40;
+    const arrowStartX = pipelinePanelX;
+    body += `
+      <g class="mesh-hoverable"
+         data-info-title="Client → driver"
+         data-info-desc="Pipelines arrive via POST /mesh/jobs/run from any HTTP client (this UI, curl, or another service). The driver's PipelinesController accepts the YAML, hands it to the JobRunner, which drains source → steps → sinks node by node.">
+        <circle cx="${clientCircleX}" cy="${clientY}" r="14"
+                class="mesh-client-node" fill="#eaf3f8" stroke="var(--primary-mesh)" stroke-width="1.5"/>
+        <text x="${clientCircleX}" y="${clientY + 4}" text-anchor="middle" style="font-size:0.7rem; fill:var(--primary-mesh); font-weight:600;">GUI</text>
+        <line x1="${clientCircleX + 15}" y1="${clientY}" x2="${arrowStartX - 4}" y2="${clientY}"
+              class="mesh-client-edge" stroke="var(--primary-mesh)" stroke-width="1.5"
+              marker-end="url(#mesh-arrow)" stroke-dasharray="4 3"/>
       </g>
     `;
   }

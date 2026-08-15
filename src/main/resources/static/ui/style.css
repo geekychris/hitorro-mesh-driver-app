@@ -758,6 +758,30 @@ table.result th.row-num-header {
 #mesh-viz .mesh-hoverable:hover rect,
 #mesh-viz .mesh-hoverable:hover .mesh-box { filter: drop-shadow(0 2px 6px rgba(46,134,171,0.35)); }
 
+/* Pipelines-on-driver panel — the main destination for locally-executed
+   pipeline nodes. Always visible; gets a strong border + shadow when it
+   has activity, muted otherwise. */
+#mesh-viz .mesh-pipeline-panel {
+  fill: #fffbf0;
+  stroke: rgba(243, 156, 18, 0.35);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.05));
+  transition: all 0.3s ease;
+}
+#mesh-viz .mesh-pipeline-panel.has-activity {
+  stroke: var(--warning);
+  stroke-width: 2;
+  filter: drop-shadow(0 3px 10px rgba(243, 156, 18, 0.3));
+}
+
+/* Animated "client → driver" arrow so users see WHERE their job arrived. */
+#mesh-viz .mesh-client-node {
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.15));
+}
+#mesh-viz .mesh-client-edge {
+  animation: mesh-edge-flow 1.4s linear infinite;
+}
+
 /* Broadcast fan-out label */
 .mesh-fanout-label {
   fill: #8a5a00; font-size: 0.72rem; font-weight: 600;
