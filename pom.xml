@@ -193,6 +193,19 @@
             <artifactId>hitorro-mesh-pipelines</artifactId>
             <version>3.0.1</version>
         </dependency>
+        <!-- Real sink adapters — dropped in via ServiceLoader. Adding
+             these upgrades the built-in Phase-1 KV / Lucene stubs to
+             real RocksDB writes + real Lucene indices at runtime. -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-pipelines-kvstore</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-pipelines-lucene</artifactId>
+            <version>3.0.1</version>
+        </dependency>
         <!-- Pull in the pipelines module's optional adapter deps so the
              groovy-map / kafka / (jnats is already transitively present
              via hitorro-mesh-nats) steps work out of the box. -->
