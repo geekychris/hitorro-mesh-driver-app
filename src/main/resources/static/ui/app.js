@@ -1829,7 +1829,11 @@ function buildRetrievalQuery() {
     search: {query: q, offset, limit, lang, facets}
   };
   if ($('#stage-fetch')?.checked) {
-    query.fetch = {enabled: true};
+    // Send an empty object. DocumentRetriever.participate() returns true
+    // when query.exists("fetch") and there is no fetch.enabled sub-key —
+    // sending {enabled: true} tripped a bug where the stage read the
+    // boolean via getString, got null, and silently skipped.
+    query.fetch = {};
   }
   if ($('#stage-fixup')?.checked) {
     const tags = ($('#stage-fixup-tags')?.value || '').trim()
@@ -2018,7 +2022,6 @@ function renderFleetResult(r, queryText) {
     return;
   }
   const docs = r.documents || [];
-  const cols = Array.from(new Set(docs.flatMap(d => Object.keys(d))));
 
   // Aggregates: SearchSummary emits {_aggregate:"summary", ...}; Facet: {_aggregate:"facet", ...}; Summarization: {_aggregate:"summarization", ...}
   const aggs = r.aggregates || [];
@@ -2037,6 +2040,8 @@ function renderFleetResult(r, queryText) {
   const ctxHtml = r.contextAttributes ? Object.entries(r.contextAttributes)
       .map(([k,v]) => `<code>${esc(k)}=${esc(String(v))}</code>`).join(' · ') : '';
 
+  const usedFetch = r.stagesUsed && r.stagesUsed.includes('DocumentRetriever');
+
   host.innerHTML = `
     <div class="meta" style="margin-bottom: 0.4rem;">
       <b>${docs.length}</b> docs · totalHits <b>${r.totalHits ?? '?'}</b> · ${r.searchTimeMs ?? '?'} ms search · ${r.totalTimeMs ?? '?'} ms wall
@@ -2047,23 +2052,73 @@ function renderFleetResult(r, queryText) {
     ${aggHtml}
     ${facetsHtml}
     ${docs.length ? `
-      <div style="overflow-x: auto; max-height: 500px; overflow-y: auto;">
-        <table style="width:100%; font-size: 0.75rem;">
-          <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
-          <tbody>${docs.map(d => `
-            <tr>${cols.map(c => {
-              const v = d[c];
-              if (v == null) return '<td class="meta">—</td>';
-              const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
-              return `<td>${esc(s.length > 80 ? s.slice(0, 77) + '…' : s)}</td>`;
-            }).join('')}</tr>`).join('')}
-          </tbody>
-        </table>
+      <div class="meta" style="margin:0.3rem 0 0.2rem 0;">
+        Source per doc:
+        ${usedFetch ? '<span title="DocumentRetriever fetched from KV store — full rich JSON">📦 KV</span>'
+                    : '<span title="Reconstructed from stored fields in Lucene index — only projected fields, no nested structure">🔎 index</span>'}
+        · click any row to expand full JSON
+      </div>
+      <div id="search-hits" style="border-top:1px solid var(--muted-border-color,#e0e0e0); max-height:500px; overflow-y:auto;">
+        ${docs.map((d, i) => renderHitRow(d, i, usedFetch)).join('')}
       </div>` : '<p class="meta">No documents returned.</p>'}
     ${r.errors && r.errors.length ? `
       <div style="margin-top:0.5rem; color:var(--danger); font-size:0.75rem;">
         ${r.errors.map(e => `<div>${esc(e)}</div>`).join('')}
       </div>` : ''}`;
+
+  // Wire per-row expand toggles + copy buttons.
+  docs.forEach((d, i) => {
+    const head = $(`#hit-head-${i}`);
+    if (head) head.addEventListener('click', () => {
+      const body = $(`#hit-body-${i}`);
+      body.hidden = !body.hidden;
+      $(`#hit-caret-${i}`).textContent = body.hidden ? '▸' : '▾';
+    });
+    const copy = $(`#hit-copy-${i}`);
+    if (copy) copy.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      navigator.clipboard.writeText(JSON.stringify(d, null, 2)).then(
+        () => plToast('JSON copied', 'ok'),
+        () => plToast('Copy failed', 'warn'));
+    });
+  });
+}
+
+function renderHitRow(doc, idx, usedFetch) {
+  // Try to pick a natural title + subtitle for the collapsed row.
+  const title = doc.title || doc.name || doc.iata || doc.id
+                || doc._uid || Object.values(doc)[0] || `hit ${idx+1}`;
+  const subtitle = [];
+  if (doc.id && doc.id !== title)         subtitle.push(`id=${doc.id}`);
+  if (doc.type)                            subtitle.push(`type=${doc.type}`);
+  if (doc.country)                         subtitle.push(`country=${doc.country}`);
+  if (typeof doc._score === 'number')      subtitle.push(`score=${doc._score.toFixed(2)}`);
+  // Field count as a stand-in "richness" indicator so users can eyeball
+  // whether they got the index projection (few fields) vs the full JVS
+  // from KV (nested arrays / objects push the count up).
+  const nFields = Object.keys(doc).length;
+  const nested  = Object.values(doc).filter(v => v && typeof v === 'object').length;
+  subtitle.push(`${nFields} field${nFields===1?'':'s'}${nested ? ', '+nested+' nested' : ''}`);
+  return `
+    <div style="border-bottom:1px solid var(--muted-border-color,#e8e8e8);">
+      <div id="hit-head-${idx}" style="display:flex; align-items:center; gap:0.5rem;
+           padding:0.35rem 0.5rem; cursor:pointer;"
+           title="Click to show full JSON">
+        <span id="hit-caret-${idx}" style="width:1rem;">▸</span>
+        <div style="flex:1; overflow:hidden;">
+          <div><b>${esc(String(title))}</b></div>
+          <div class="meta" style="font-size:0.72rem;">${subtitle.map(esc).join(' · ')}</div>
+        </div>
+        <button id="hit-copy-${idx}" class="secondary outline"
+                style="margin:0; padding:0.05rem 0.4rem; font-size:0.7rem;"
+                title="Copy this doc's JSON to clipboard">📋</button>
+      </div>
+      <pre id="hit-body-${idx}" hidden
+           style="margin:0 0 0.4rem 1.5rem; padding:0.4rem 0.6rem; font-size:0.7rem;
+                  line-height:1.35; white-space:pre-wrap; word-break:break-word;
+                  background:var(--card-sectioning-background-color,#f7f7f7);
+                  border-radius:4px; max-height:400px; overflow:auto;">${esc(JSON.stringify(doc, null, 2))}</pre>
+    </div>`;
 }
 
 function renderFacetsPanel(facets) {
