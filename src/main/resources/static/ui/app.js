@@ -2232,6 +2232,8 @@ function pbEmit() {
   if ($('#pb-sink-ndjson').checked)  sinks.push({kind: 'ndjson-file', url: `target/${jobId}.ndjson`});
   if ($('#pb-sink-kv').checked)      sinks.push({kind: 'kvstore', name: jobId + '-kv', keyExpr: 'id'});
   if ($('#pb-sink-lucene').checked)  sinks.push({kind: 'lucene',  name: jobId + '-idx', storeSource: true});
+  if ($('#pb-sink-nats') && $('#pb-sink-nats').checked)
+    sinks.push({kind: 'nats', subject: jobId + '.out', servers: 'nats://localhost:4222'});
   const source = pbBuildSource(sourceKind, sourceArg);
   const stepYaml = pbSteps.map(s => '        - ' + JSON.stringify(pbCleanStep(s))).join('\n');
   const sinkYaml = sinks.map(s => '        - ' + JSON.stringify(s)).join('\n');
@@ -2251,6 +2253,7 @@ function pbEmit() {
 function pbBuildSource(kind, arg) {
   if (!arg) {
     if (kind === 'inline') return {kind:'inline', rows:[{msg:'hello'},{msg:'world'}]};
+    if (kind === 'sql')    return {kind:'sql', sql: 'SELECT * FROM iso_currencies LIMIT 10'};
     return {kind};
   }
   switch (kind) {
@@ -2258,6 +2261,7 @@ function pbBuildSource(kind, arg) {
     case 'kafka':   return {kind:'kafka', bootstrap: 'localhost:9092', topic: arg, groupId: 'ui-builder'};
     case 'kvstore': return {kind:'kvstore', name: arg};
     case 'lucene':  return {kind:'lucene', name: arg, query: ''};
+    case 'sql':     return {kind:'sql', sql: arg};
     default:        return {kind, url: arg};
   }
 }
@@ -2318,33 +2322,49 @@ document.addEventListener('DOMContentLoaded', () => {
   const runBtn = $('#pl-run');
   if (!runBtn) return;
   runBtn.addEventListener('click', async () => {
-    const yaml = $('#pl-yaml').value.trim();
-    if (!yaml) { plToast('paste or load a job spec first', 'warn'); return; }
+    let yaml = $('#pl-yaml').value.trim();
+    // Auto-recover if the editor is empty — load the first bundled
+    // example so the button always does SOMETHING visible.
+    if (!yaml && plBundledCache && Object.keys(plBundledCache).length) {
+      const firstName = Object.keys(plBundledCache)[0];
+      yaml = plBundledCache[firstName];
+      $('#pl-yaml').value = yaml;
+      plToast(`auto-loaded "${firstName}" example — click Run again if you want a different one`, 'warn');
+    }
+    if (!yaml) {
+      plToast('editor is empty — click a bundled example on the left first', 'warn');
+      return;
+    }
     runBtn.disabled = true;
+    runBtn.textContent = '⋯ Running';
+    // Very visible in-panel status so users never wonder "did it fire?"
+    $('#pl-status').hidden = false;
+    $('#pl-status-id').textContent = 'submitting…';
+    $('#pl-status-state').textContent = 'SUBMITTING';
+    $('#pl-status-state').className = 'badge pl-state-running';
+    $('#pl-dag').innerHTML = '<div class="meta">contacting driver…</div>';
+    $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     try {
       const r = await api('/mesh/jobs/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/yaml' },
         body: yaml,
       });
-      // Instant feedback: show status panel, prefill id, start polling
-      // before the job possibly completes so the user sees at least one
-      // state transition.
-      $('#pl-status').hidden = false;
       $('#pl-status-id').textContent = r.jobId;
       $('#pl-status-state').textContent = 'RUNNING';
       $('#pl-status-state').className = 'badge pl-state-running';
-      $('#pl-dag').innerHTML = '<div class="meta">starting…</div>';
       startPolling(r.jobId);
       plToast(`▶ started job ${r.jobId}`, 'ok');
-      // Kick the history refresh once so the card appears immediately.
       refreshRunHistory();
-      // Scroll the status panel into view so the user's eye follows.
-      $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) {
+      $('#pl-status-id').textContent = 'error';
+      $('#pl-status-state').textContent = 'FAILED';
+      $('#pl-status-state').className = 'badge pl-state-failed';
+      $('#pl-dag').innerHTML = `<div style="color:var(--danger); padding:0.5rem;">${esc(e.message)}</div>`;
       plToast('run failed: ' + e.message, 'err');
     } finally {
       runBtn.disabled = false;
+      runBtn.textContent = '▶ Run';
     }
   });
 });

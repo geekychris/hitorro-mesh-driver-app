@@ -519,16 +519,23 @@
           <div class="pl-builder-row">
             <label>source</label>
             <select id="pb-source-kind">
-              <option value="inline">inline (rows in spec)</option>
-              <option value="ndjson-file">ndjson-file</option>
-              <option value="json-file">json-file</option>
-              <option value="csv-file">csv-file</option>
-              <option value="nats">nats (streaming)</option>
-              <option value="kafka">kafka (streaming)</option>
-              <option value="kvstore">kvstore</option>
-              <option value="lucene">lucene</option>
+              <option value="inline">inline — rows literal in spec</option>
+              <option value="ndjson-file">ndjson-file — one JSON per line (local/gz)</option>
+              <option value="json-file">json-file — top-level array</option>
+              <option value="csv-file">csv-file — header row, strings</option>
+              <option value="sql">sql — run a mesh query and stream its rows</option>
+              <option value="kvstore">kvstore — read from a RocksDB store</option>
+              <option value="lucene">lucene index — full-text search results</option>
+              <option value="nats">nats — subscribe to a subject (streaming)</option>
+              <option value="kafka">kafka — consume a topic (streaming)</option>
             </select>
-            <input id="pb-source-arg" type="text" placeholder="url / subject / topic / name" style="flex:1"/>
+            <input id="pb-source-arg" type="text" placeholder="url / SQL / subject / topic / store-name" style="flex:1"/>
+          </div>
+          <div class="pl-builder-row" style="margin-top:-0.2rem;">
+            <label></label>
+            <small class="meta" id="pb-source-help">
+              inline: leave blank — a 2-row {msg:hello} sample is generated.
+            </small>
           </div>
           <div id="pb-steps"></div>
           <div class="pl-builder-row">
@@ -543,11 +550,12 @@
           </div>
           <div class="pl-builder-row">
             <label>sinks</label>
-            <label><input type="checkbox" id="pb-sink-mem" checked/> memory-table</label>
+            <label><input type="checkbox" id="pb-sink-mem" checked/> memory-table (in-process)</label>
             <label><input type="checkbox" id="pb-sink-cnt" checked/> counting</label>
             <label><input type="checkbox" id="pb-sink-ndjson"/> ndjson-file</label>
-            <label><input type="checkbox" id="pb-sink-kv"/> kvstore</label>
-            <label><input type="checkbox" id="pb-sink-lucene"/> lucene</label>
+            <label><input type="checkbox" id="pb-sink-kv"/> kvstore (RocksDB)</label>
+            <label><input type="checkbox" id="pb-sink-lucene"/> lucene index</label>
+            <label><input type="checkbox" id="pb-sink-nats"/> nats subject</label>
           </div>
           <div class="pl-builder-row">
             <button type="button" id="pb-emit" style="padding:0.15rem 0.9rem;">↓ Build & load into editor</button>
