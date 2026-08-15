@@ -55,6 +55,14 @@ public class FleetProcessManager {
         List<String> cmd = new ArrayList<>();
         cmd.add(javaBin());
         cmd.add(FleetRegistry.jdwpArg(m));   // JDWP always on for driver-spawned fleet members
+        // Mirror HT_BIN from the member's defaultEnv onto sysprops so
+        // hitorro-core EnvCore.getBin() picks it up on either surface —
+        // some type-system paths consult sysprops directly.
+        String htBin = m.defaultEnv().get("HT_BIN");
+        if (htBin != null && !htBin.isBlank()) {
+            cmd.add("-DHT_BIN=" + htBin);
+            cmd.add("-Dht.bin=" + htBin);
+        }
         cmd.add("-jar");
         cmd.add(jar.toString());
         cmd.addAll(m.defaultArgs());

@@ -46,11 +46,40 @@ public final class FleetRegistry {
                         5090,
                         "/api/retrieval/health",
                         jarCandidatesFor("hitorro-fleet-retrieval", "3.0.1"),
-                        Map.of("HITORRO_PIPELINES_HOME", HOME + "/.hitorro/pipelines"),
-                        List.of("--hitorro.fleet.retrieval.mode=shared", "--server.port=8090")
+                        // HT_BIN must be set so the type system (JsonTypeSystem +
+                        // LuceneFieldTypes) can find config/types + config/jsonconfigs
+                        // when the coordinator resolves types for jvs-lucene queries.
+                        Map.of(
+                                "HITORRO_PIPELINES_HOME", HOME + "/.hitorro/pipelines",
+                                "HT_BIN", detectHitorroBin()
+                        ),
+                        // -Dht.bin and -DHT_BIN mirror the env var (EnvCore checks
+                        // sysprops first, then env). Belt and suspenders — some
+                        // paths in the type system consult sysprops directly.
+                        List.of(
+                                "--hitorro.fleet.retrieval.mode=shared",
+                                "--server.port=8090"
+                        )
                 )
                 // future fleet members line up here (bump debugPort by 1 each)
         );
+    }
+
+    /**
+     * Best-effort resolution of the hitorro repo root that holds
+     * {@code config/types/} + {@code config/jsonconfigs/lucene/}. Env var wins,
+     * then a sysprop, then the standard $HOME/hitorro layout, then $PWD.
+     */
+    private static String detectHitorroBin() {
+        String p = System.getenv("HT_BIN");
+        if (p == null || p.isBlank()) p = System.getProperty("HT_BIN");
+        if (p == null || p.isBlank()) p = System.getProperty("ht.bin");
+        if ((p == null || p.isBlank())
+                && java.nio.file.Files.isDirectory(java.nio.file.Paths.get(HOME, "hitorro", "config", "types"))) {
+            p = HOME + "/hitorro";
+        }
+        if (p == null || p.isBlank()) p = System.getProperty("user.dir", HOME);
+        return p;
     }
 
     /** JDWP agent arg for a member — attach with jdb / IntelliJ Remote JVM Debug. */
