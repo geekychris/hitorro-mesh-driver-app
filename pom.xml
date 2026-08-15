@@ -29,6 +29,36 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- Pin every Lucene artifact to one version. pipelines-lucene
+                 uses 9.11.1 by default; hitorro-index brings 9.12.0. Two
+                 Lucene versions on one classpath breaks Codec ServiceLoader
+                 (backward_codecs.Lucene99Codec loads from one jar and finds
+                 the wrong Codec base). Force everything to 9.12.0. -->
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-core</artifactId>
+                <version>9.12.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-analysis-common</artifactId>
+                <version>9.12.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-queryparser</artifactId>
+                <version>9.12.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-queries</artifactId>
+                <version>9.12.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-sandbox</artifactId>
+                <version>9.12.0</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -205,6 +235,29 @@
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-lucene</artifactId>
             <version>3.0.1</version>
+        </dependency>
+        <!-- jvs-lucene sink (type-aware Lucene projection via
+             JVSLuceneIndexWriter) + jvs-groovy step. Same shape as the
+             other pipelines-* adapters — ServiceLoader picks it up.
+             Same aggressive exclusion set as the other hitorro deps in this
+             pom — jsontypesystem transitively drags the NLP/hadoop tail. -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-mesh-pipelines-jvstype</artifactId>
+            <version>3.0.1</version>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+                <exclusion><groupId>org.apache.opennlp</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.microsoft.onnxruntime</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.huggingface</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>ai.djl.api</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>net.sf.extjwnl</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.poi</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.pdfbox</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>org.apache.xmlbeans</groupId><artifactId>*</artifactId></exclusion>
+                <exclusion><groupId>com.drewnoakes</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
         </dependency>
         <!-- Pull in the pipelines module's optional adapter deps so the
              groovy-map / kafka / (jnats is already transitively present
