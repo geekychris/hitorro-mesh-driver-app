@@ -838,6 +838,24 @@ table.result th.row-num-header {
 .pl-toast-warn { background: var(--warning); color: white; }
 .pl-toast-err  { background: var(--danger);  color: white; }
 
+/* Glossary card at top */
+.ui-glossary {
+  margin: 0.5rem 0 1rem 0;
+  background: #fbfcfe;
+  border: 1px solid rgba(46,134,171,0.25);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+.ui-glossary summary { cursor: pointer; font-weight: 600; color: var(--primary-mesh); }
+.ui-glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+  gap: 0.75rem; margin-top: 0.75rem;
+  font-size: 0.85rem; line-height: 1.4;
+}
+.ui-glossary-grid > div { padding: 0.4rem 0.5rem; }
+.ui-glossary-grid code { font-size: 0.75rem; background: #eef; padding: 0 0.3rem; border-radius: 3px; }
+.ui-term { color: var(--primary-mesh); font-size: 0.9rem; margin-right: 0.4rem; }
+
 /* Pipeline builder card */
 .pl-builder { border-left: 3px solid var(--primary-mesh); padding-left: 0.75rem; }
 .pl-builder-row { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0; flex-wrap: wrap; }

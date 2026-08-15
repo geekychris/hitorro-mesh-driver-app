@@ -1015,9 +1015,10 @@ function renderTables(tables) {
   $('#table-list').innerHTML = '<div class="entity-list"><ul>' + tables.map(t => {
     const isBroadcast = t.kind === 'broadcast';
     const parts = isBroadcast
-      ? '<span class="badge accent">broadcast</span>'
-      : ((t.partitions || []).map(p => `<span class="cap">${esc(p.key)}</span>`).join('') || '<small>(no partitions)</small>');
-    const streamBadge = t.streaming ? '<span class="badge accent">streaming</span>' : '';
+      ? '<span class="badge accent" title="Broadcast table: the SAME rows are replicated at every agent. Use for small dimension tables — JOINs against them are local at each agent (no shuffle). Example: iso_currencies, geonames_country_info.">broadcast</span>'
+      : ((t.partitions || []).map(p => `<span class="cap" title="Partition key '${esc(p.key)}' of a distributed table. Only ONE agent holds this partition; the driver routes scans of this table with WHERE partition-key='${esc(p.key)}' to that agent.">${esc(p.key)}</span>`).join('')
+         || '<small title="Distributed table with no partitions declared yet.">(no partitions)</small>');
+    const streamBadge = t.streaming ? '<span class="badge accent" title="Streaming table: agents watch it live via NATS/Kafka; SELECTs can be windowed and push results as they arrive.">streaming</span>' : '';
     return `<li>
        <span>
          <span class="name clickable-name" data-table="${esc(t.name)}">${esc(t.name)}</span>
