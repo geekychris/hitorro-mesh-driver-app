@@ -701,6 +701,80 @@ table.result th.row-num-header {
   50%      { box-shadow: 0 0 0 3px rgba(243, 156, 18, 0.15); }
 }
 
+/* Mesh tab — cluster topology visualisation */
+#mesh-viz .mesh-box {
+  fill: white;
+  stroke: rgba(46,134,171,0.35);
+  stroke-width: 1.5;
+  transition: all 0.4s ease;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.06));
+}
+#mesh-viz .mesh-driver     { fill: #eaf3f8; stroke: var(--primary-mesh); stroke-width: 2; }
+#mesh-viz .mesh-agent      { fill: #fbfbfd; stroke: rgba(46,134,171,0.6); stroke-width: 1.5; }
+#mesh-viz .mesh-driver-jobs-box { fill: #fffbf0; stroke: var(--warning); stroke-width: 1; }
+
+#mesh-viz .mesh-title {
+  fill: var(--primary-mesh); font-weight: 700; font-size: 0.9rem;
+  font-family: var(--pico-font-family, system-ui, sans-serif);
+}
+#mesh-viz .mesh-sub {
+  fill: var(--muted); font-size: 0.72rem;
+  font-family: var(--pico-font-family, system-ui, sans-serif);
+}
+#mesh-viz .mesh-card {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#mesh-viz .mesh-card text {
+  fill: #333; font-size: 0.72rem;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+#mesh-viz .mesh-card rect {
+  fill: #f6f8fb; stroke: rgba(0,0,0,0.08); stroke-width: 1;
+  transition: fill 0.3s ease, stroke 0.3s ease;
+}
+#mesh-viz .mesh-card.mesh-partition rect { fill: #e5f5ea; stroke: var(--success); }
+#mesh-viz .mesh-card.mesh-broadcast-summary rect { fill: #eef; stroke: var(--primary-mesh); }
+#mesh-viz .mesh-card.mesh-pipeline-cap rect { fill: #f3e5f5; stroke: #8e44ad; }
+#mesh-viz .mesh-card.mesh-pipeline rect { fill: #fffbf0; stroke: var(--warning); stroke-width: 1.5; }
+#mesh-viz .mesh-card.mesh-pipeline text { fill: #8a5a00; font-weight: 600; }
+
+/* Pulsing running-pipeline pill */
+#mesh-viz .mesh-pulse rect {
+  animation: mesh-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mesh-pulse {
+  0%, 100% { fill: #fffbf0; }
+  50%      { fill: #ffe8b3; }
+}
+
+/* Curved driver→agent edges — flowing dash animation */
+#mesh-viz .mesh-edge {
+  animation: mesh-edge-flow 1.4s linear infinite;
+  opacity: 0.7;
+}
+@keyframes mesh-edge-flow {
+  0%   { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -16; }
+}
+
+/* Column entry transition — cards + boxes slide in when the layout changes. */
+#mesh-viz .mesh-agent-g,
+#mesh-viz .mesh-driver-g,
+#mesh-viz .mesh-driver-jobs {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Legend swatches */
+.mesh-swatch {
+  display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+  margin-right: 0.3rem; vertical-align: middle;
+}
+.mesh-swatch.mesh-driver { background: #eaf3f8; border: 1.5px solid var(--primary-mesh); }
+.mesh-swatch.mesh-agent { background: #fbfbfd; border: 1.5px solid rgba(46,134,171,0.6); }
+.mesh-swatch.mesh-partition { background: #e5f5ea; border: 1px solid var(--success); }
+.mesh-swatch.mesh-broadcast { background: #eef; border: 1px solid var(--primary-mesh); }
+.mesh-swatch.mesh-pipeline { background: #fffbf0; border: 1.5px solid var(--warning); }
+
 /* Schema panel */
 #schema-panel { border: 2px solid var(--primary-mesh); }
 #schema-fields dl { margin: 0; }

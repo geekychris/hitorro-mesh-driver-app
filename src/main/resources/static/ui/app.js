@@ -858,6 +858,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'metrics') refreshMetricsSnapshot();
         if (target === 'datasets') refreshDatasets();
         if (target === 'pipelines') refreshPipelines();
+        if (target === 'mesh') refreshMeshViz();
       } else if (btn.dataset.view) {
         $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
         $('#' + target, btn.closest('article')).classList.add('active');
@@ -1759,6 +1760,200 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(refreshSparklines, 5000);
   armActiveAutoRefresh();
 });
+
+// ================================================================ MESH VIZ
+// Flowing SVG graph of the whole mesh: driver at top, one column per agent
+// below, cards for each agent's partitions + broadcasts + active pipeline
+// nodes. Refreshes every 2s while the tab is visible. Layout is column-based
+// with animated CSS transitions on card positions + pulsing on running items.
+
+let meshVizTimer = null;
+
+async function refreshMeshViz() {
+  await drawMeshViz();
+  if (meshVizTimer) clearInterval(meshVizTimer);
+  meshVizTimer = setInterval(() => {
+    // Stop refreshing when the tab isn't active — cheap and polite.
+    if (!$('#mesh').classList.contains('active')) return;
+    drawMeshViz();
+  }, 2000);
+}
+
+async function drawMeshViz() {
+  let topo, jobs;
+  try {
+    [topo, jobs] = await Promise.all([
+      api('/mesh/topology'),
+      api('/mesh/jobs').catch(() => []),
+    ]);
+  } catch (e) {
+    $('#mesh-viz').innerHTML = `<text x="20" y="30" fill="var(--danger)">error: ${esc(e.message)}</text>`;
+    return;
+  }
+
+  const svg = $('#mesh-viz');
+  const W = svg.clientWidth || 900;
+  const agents = topo.agents || [];
+  const nAgents = Math.max(1, agents.length);
+
+  // Layout constants — column per agent, rows for card stacks inside.
+  const COL_W       = Math.min(320, Math.max(200, Math.floor((W - 40) / nAgents)));
+  const DRIVER_H    = 70;
+  const AGENT_HDR_H = 44;
+  const CARD_H      = 26;
+  const CARD_GAP    = 4;
+  const PADDING     = 20;
+  const GAP_TB      = 60;   // vertical gap between driver + agent rows
+
+  // Build the group set of active pipeline nodes for pulsing display.
+  const runningJobs = (jobs || []).filter(j => j.state === 'RUNNING');
+  const runningNodesByAgent = {};  // "auto" for local driver-only nodes today
+  runningJobs.forEach(j => {
+    (j.nodes || []).filter(n => n.state === 'RUNNING').forEach(n => {
+      // Phase 1 runs on the driver; when Phase 2 scheduler lands nodes get
+      // an "agent" tag and this bucketing changes accordingly.
+      const key = n.assignedAgent || '__driver__';
+      (runningNodesByAgent[key] = runningNodesByAgent[key] || [])
+          .push({ jobId: j.jobId, jobName: j.jobSpecName, ...n });
+    });
+  });
+
+  // Ordered card list per agent: partitions first, then broadcasts.
+  const broadcasts = topo.broadcasts || [];
+  const cardsByAgent = agents.map(a => {
+    const cards = [];
+    (a.partitions || []).forEach(p => cards.push({
+      kind: 'partition', label: `${p.table}[${p.key}]`,
+    }));
+    // Broadcast is on every agent conceptually — show one collapsed marker.
+    if (broadcasts.length) {
+      cards.push({ kind: 'broadcast-summary',
+                   label: `${broadcasts.length} broadcast tables` });
+    }
+    if (a.hasPipelineNode) {
+      cards.push({ kind: 'pipeline-cap', label: '+ pipeline-node' });
+    }
+    return { agent: a, cards };
+  });
+
+  const maxCards = Math.max(1, ...cardsByAgent.map(x => x.cards.length),
+                            ...Object.values(runningNodesByAgent).map(a => a.length));
+  const agentCol_H = AGENT_HDR_H + (CARD_H + CARD_GAP) * (maxCards + 2) + 20;
+  const totalH = DRIVER_H + GAP_TB + agentCol_H + 20;
+  svg.setAttribute('height', totalH);
+
+  // Preserve the defs from the initial HTML — grab their outer HTML then
+  // rebuild the rest of the SVG content on each refresh so incoming CSS
+  // transitions apply.
+  const defs = svg.querySelector('defs');
+  const defsHtml = defs ? defs.outerHTML : '';
+
+  let body = defsHtml;
+
+  // ---- Driver box (centred, top) ----
+  const driverW = 220;
+  const driverX = (W - driverW) / 2;
+  body += `
+    <g class="mesh-driver-g" transform="translate(${driverX}, ${PADDING})">
+      <rect class="mesh-box mesh-driver" width="${driverW}" height="${DRIVER_H}" rx="8"/>
+      <text class="mesh-title" x="${driverW/2}" y="24" text-anchor="middle">DRIVER</text>
+      <text class="mesh-sub"   x="${driverW/2}" y="44" text-anchor="middle">
+        uptime ${Math.floor((topo.driver?.uptimeMs || 0) / 1000)}s · pipelines: ${runningJobs.length} running
+      </text>
+      <text class="mesh-sub"   x="${driverW/2}" y="60" text-anchor="middle">
+        ${broadcasts.length} broadcasts · ${(topo.distributed || []).length} distributed tables
+      </text>
+    </g>
+  `;
+
+  // ---- Agent columns ----
+  const rowY = PADDING + DRIVER_H + GAP_TB;
+  const totalColsW = COL_W * nAgents + Math.max(0, nAgents - 1) * 20;
+  const startX = Math.max(PADDING, (W - totalColsW) / 2);
+  cardsByAgent.forEach((entry, i) => {
+    const x = startX + i * (COL_W + 20);
+    const agentH = agentCol_H;
+    const a = entry.agent;
+    const running = runningNodesByAgent[a.id] || [];
+    // Column background
+    body += `
+      <g class="mesh-agent-g" transform="translate(${x}, ${rowY})" data-agent="${esc(a.id)}">
+        <rect class="mesh-box mesh-agent" width="${COL_W}" height="${agentH}" rx="8"/>
+        <text class="mesh-title" x="${COL_W/2}" y="22" text-anchor="middle">${esc(a.id)}</text>
+        <text class="mesh-sub"   x="${COL_W/2}" y="38" text-anchor="middle">
+          ${entry.cards.filter(c => c.kind === 'partition').length} partition(s) · ${a.capabilities.length} caps
+        </text>
+        <line x1="8" x2="${COL_W-8}" y1="${AGENT_HDR_H-2}" y2="${AGENT_HDR_H-2}"
+              stroke="rgba(46,134,171,0.2)" stroke-width="1"/>
+    `;
+    // Cards inside
+    entry.cards.forEach((c, ci) => {
+      const y = AGENT_HDR_H + 6 + ci * (CARD_H + CARD_GAP);
+      const cls = 'mesh-' + c.kind.replace(/[^a-z-]/g, '');
+      body += `
+        <g class="mesh-card ${cls}" transform="translate(6, ${y})">
+          <rect width="${COL_W-12}" height="${CARD_H}" rx="4"/>
+          <text x="10" y="${CARD_H/2 + 4}" >${esc(c.label)}</text>
+        </g>
+      `;
+    });
+    // Running pipeline node pills at the bottom, if any
+    if (running.length) {
+      const baseY = AGENT_HDR_H + 6 + entry.cards.length * (CARD_H + CARD_GAP) + 10;
+      running.forEach((n, ni) => {
+        const y = baseY + ni * (CARD_H + CARD_GAP);
+        body += `
+          <g class="mesh-card mesh-pipeline mesh-pulse" transform="translate(6, ${y})">
+            <rect width="${COL_W-12}" height="${CARD_H}" rx="4"/>
+            <text x="10" y="${CARD_H/2 + 4}">▶ ${esc(n.jobName)} · ${esc(n.id)} · ${n.rowsOut||0} rows</text>
+          </g>
+        `;
+      });
+    }
+    body += `</g>`;
+    // Curved edge from driver → agent
+    const driverBottomX = W / 2;
+    const driverBottomY = PADDING + DRIVER_H;
+    const agentTopX = x + COL_W / 2;
+    const agentTopY = rowY;
+    const midY = (driverBottomY + agentTopY) / 2;
+    body += `
+      <path class="mesh-edge" d="M ${driverBottomX} ${driverBottomY}
+                                 C ${driverBottomX} ${midY}, ${agentTopX} ${midY}, ${agentTopX} ${agentTopY}"
+            fill="none" stroke="var(--primary-mesh)" stroke-width="1.5"
+            marker-end="url(#mesh-arrow)" stroke-dasharray="4 4"/>
+    `;
+  });
+
+  // Also render driver-hosted pipeline nodes as a card row under the driver
+  // for the current Phase-1 execution (nodes run on the driver JVM).
+  const driverJobs = runningNodesByAgent['__driver__'] || [];
+  if (driverJobs.length) {
+    driverJobs.forEach((n, i) => {
+      const boxW = 200;
+      const boxX = W / 2 - boxW / 2;
+      const boxY = PADDING + DRIVER_H + 8 + i * (CARD_H + CARD_GAP);
+      // Won't render — driverBottomY logic already put agents below.
+      // Instead surface them at the top-left as a floating "on driver" strip.
+    });
+    // Floating strip top-right showing driver-hosted running pipelines.
+    body += `
+      <g class="mesh-driver-jobs" transform="translate(${W - 240 - PADDING}, ${PADDING})">
+        <rect width="240" height="${Math.min(120, driverJobs.length * (CARD_H + CARD_GAP) + 20)}"
+              class="mesh-box mesh-driver-jobs-box" rx="6"/>
+        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM</text>
+        ${driverJobs.map((n, i) => `
+          <g class="mesh-card mesh-pipeline mesh-pulse" transform="translate(6, ${24 + i * (CARD_H + CARD_GAP)})">
+            <rect width="228" height="${CARD_H}" rx="4"/>
+            <text x="10" y="${CARD_H/2 + 4}">▶ ${esc(n.jobName)} · ${esc(n.id)}</text>
+          </g>
+        `).join('')}
+      </g>
+    `;
+  }
+
+  svg.innerHTML = body;
+}
 
 // ================================================================ PIPELINES
 // The Jobs / pipelines tab: bundled examples on the left, YAML editor + status

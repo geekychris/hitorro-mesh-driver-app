@@ -444,6 +444,71 @@ public class MeshRestController {
                 "agents", combined);
     }
 
+    /**
+     * Aggregate mesh state in one JSON payload for the UI's Mesh tab.
+     * Structure:
+     *
+     * <pre>
+     *   {
+     *     "driver": { "port": 8085, "uptimeMs": ... },
+     *     "agents": [
+     *       { "id": "agent-us",
+     *         "capabilities": [ ... ],
+     *         "partitions": [ {"table": "docs", "key": "us"}, ... ],
+     *         "broadcasts": [ "iso_currencies", ... ],
+     *         "hasPipelineNode": true|false,
+     *         "activeSqlQueries": [ "q42", "q43" ] }
+     *     ],
+     *     "queries": [ { "queryId": "q42", "state": "…", "assignedAgents": [...] } ],
+     *     "pipelineJobs": [ { "jobId": "...", "state": "…", "nodes": [...] } ]
+     *   }
+     * </pre>
+     */
+    @GetMapping("/topology")
+    public Map<String, Object> topology() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        Map<String, Object> driverInfo = new LinkedHashMap<>();
+        driverInfo.put("uptimeMs", java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
+        out.put("driver", driverInfo);
+
+        // Live agents. For each: capabilities → partitions + broadcasts held
+        // + whether the agent runs pipeline-node tasks.
+        List<AgentDescriptor> live = driver.agents().agentsWith(List.of("jvssql"));
+        List<Map<String, Object>> agents = new java.util.ArrayList<>();
+        for (var a : live) {
+            Map<String, Object> ag = new LinkedHashMap<>();
+            ag.put("id", a.agentId());
+            ag.put("capabilities", a.capabilities());
+            // partition:<table>:<key> capabilities describe which table
+            // partitions this agent holds. Parse them out for the UI.
+            List<Map<String, String>> parts = new java.util.ArrayList<>();
+            for (String cap : a.capabilities()) {
+                if (cap.startsWith("partition:")) {
+                    String[] pieces = cap.split(":", 3);
+                    if (pieces.length == 3) {
+                        parts.add(Map.of("table", pieces[1], "key", pieces[2]));
+                    }
+                }
+            }
+            ag.put("partitions", parts);
+            ag.put("hasPipelineNode", a.capabilities().contains("pipeline-node"));
+            agents.add(ag);
+        }
+        out.put("agents", agents);
+
+        // Tables — every broadcast is on every agent; the UI can fan.
+        List<String> broadcasts = new java.util.ArrayList<>(driver.tables().broadcastNames());
+        java.util.Collections.sort(broadcasts);
+        out.put("broadcasts", broadcasts);
+
+        List<Map<String, Object>> distributed = new java.util.ArrayList<>();
+        for (var t : driver.tables().all()) {
+            distributed.add(Map.of("name", t.name(), "partitions", t.partitions()));
+        }
+        out.put("distributed", distributed);
+        return out;
+    }
+
     @GetMapping("/tables")
     public List<Map<String, Object>> tables() {
         List<Map<String, Object>> out = new java.util.ArrayList<>();

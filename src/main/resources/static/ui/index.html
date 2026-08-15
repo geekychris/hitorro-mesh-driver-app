@@ -31,6 +31,7 @@
   <div class="tabs" role="tablist">
     <button role="tab" data-target="cluster" class="active">Cluster</button>
     <button role="tab" data-target="datasets">Datasets</button>
+    <button role="tab" data-target="mesh">Mesh</button>
     <button role="tab" data-target="pipelines">Pipelines</button>
     <button role="tab" data-target="playground">Playground</button>
     <button role="tab" data-target="stream">Streaming</button>
@@ -451,6 +452,38 @@
     </article>
     <p><small>Auto-refreshes every 3 seconds while this tab is active.
       Cancel a query with the × button per row.</small></p>
+  </section>
+
+  <!-- ================== MESH ================== -->
+  <section id="mesh" class="tab-panel">
+    <article>
+      <header>
+        <span>Cluster topology</span>
+        <small class="meta">live · auto-refresh 2 s · driver + agents + tables + pipelines</small>
+      </header>
+      <div id="mesh-viz-wrapper" style="overflow-x: auto;">
+        <svg id="mesh-viz" width="100%" height="640" style="min-width: 900px;">
+          <defs>
+            <marker id="mesh-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--primary-mesh)"/>
+            </marker>
+            <linearGradient id="mesh-flow" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%"  stop-color="var(--primary-mesh)" stop-opacity="0.9"/>
+              <stop offset="50%" stop-color="var(--accent-mesh)"  stop-opacity="0.7"/>
+              <stop offset="100%" stop-color="var(--primary-mesh)" stop-opacity="0.9"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div id="mesh-legend" class="meta" style="margin-top: 0.5rem; display:flex; gap: 1rem; flex-wrap: wrap;">
+        <span><span class="mesh-swatch mesh-driver"></span> driver</span>
+        <span><span class="mesh-swatch mesh-agent"></span> agent</span>
+        <span><span class="mesh-swatch mesh-partition"></span> partition</span>
+        <span><span class="mesh-swatch mesh-broadcast"></span> broadcast</span>
+        <span><span class="mesh-swatch mesh-pipeline"></span> pipeline node</span>
+      </div>
+    </article>
   </section>
 
   <!-- ================== PIPELINES ================== -->
