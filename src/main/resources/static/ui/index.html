@@ -37,6 +37,8 @@
             title="Cluster topology graph — driver, agents, what runs inside each, how data flows.">Mesh</button>
     <button role="tab" data-target="pipelines"
             title="DAG pipelines — YAML jobs of source → steps → sinks. Also has a form-based builder.">Pipelines</button>
+    <button role="tab" data-target="search"
+            title="Full-text search over pipeline-indexed Lucene indexes.">Search</button>
     <button role="tab" data-target="playground"
             title="Write and run ad-hoc SQL against every registered table.">Playground</button>
     <button role="tab" data-target="stream"
@@ -711,6 +713,76 @@
         <small class="meta">auto-refreshes every second while any job is running · click a card to jump to it</small>
       </header>
       <div id="pl-runs" class="pl-runs-grid">no runs yet</div>
+    </article>
+  </section>
+
+  <!-- ================== SEARCH ================== -->
+  <section id="search" class="tab-panel">
+    <article>
+      <header>
+        <span>Pipeline-indexed search</span>
+        <small class="meta">Lucene indexes written by pipeline nodes — queryable via REST or the box below</small>
+      </header>
+      <div class="grid">
+        <article style="max-width: 22rem;">
+          <header>
+            <span>Indexes</span>
+            <small class="meta" id="search-index-count">—</small>
+          </header>
+          <div id="search-index-list" title="Click any index to load it into the search box.">loading…</div>
+        </article>
+        <article>
+          <header>
+            <span>Query</span>
+            <span style="flex:1"></span>
+            <button id="search-run" type="button"
+                    title="Run the query against the selected index."
+                    style="margin:0;padding:0.15rem 0.9rem;">🔍 Search</button>
+          </header>
+          <div class="row" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
+            <label style="min-width: 4rem;">Index</label>
+            <input id="search-index" type="text" placeholder="pick from list ↑" style="flex: 1;"/>
+          </div>
+          <div class="row" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
+            <label style="min-width: 4rem;">Query</label>
+            <input id="search-q" type="text"
+                   placeholder="Lucene syntax over _text catch-all — or fielded (iata:LHR)"
+                   style="flex: 1;"
+                   onkeydown="if(event.key==='Enter')document.getElementById('search-run').click()"/>
+          </div>
+          <div class="row" style="display:flex; gap:0.5rem; align-items:center;">
+            <label style="min-width: 4rem;">Limit</label>
+            <input id="search-limit" type="number" value="20" min="1" max="1000" style="width: 6rem;"/>
+            <small class="meta" style="flex: 1;">
+              Empty query = match all. Try <code>heathrow</code>, <code>US</code>, <code>iata:JFK</code>,
+              or <code>altitude_bucket:alpine</code>.
+            </small>
+          </div>
+          <div id="search-result" style="margin-top: 0.75rem;">
+            <p class="meta">Pick an index and click 🔍 Search.</p>
+          </div>
+        </article>
+      </div>
+
+      <article>
+        <header><span>Try it end-to-end</span></header>
+        <ol style="line-height:1.6;">
+          <li>Go to <b>Pipelines</b> → load the bundled <code>enrich-and-index</code> example → click <b>▶ Run</b>.</li>
+          <li>The pipeline reads 12 airports, enriches each with an altitude bucket + UUID, and indexes to
+              the Lucene index named <code>airports</code>.</li>
+          <li>Come back here → click <code>airports</code> in the Indexes list → type <code>heathrow</code>
+              in the query box → click 🔍 Search.</li>
+          <li>Every hit shows the FULL enriched document (via <code>_source</code>) including the fields
+              the enrichment step wrote.</li>
+        </ol>
+        <p><small class="meta">
+          Full JVS-type-aware projection via <code>hitorro-index</code>' <code>IndexManager</code> +
+          <code>JVSLuceneIndexWriter</code> is the next iteration. Today's setup uses plain Lucene:
+          every scalar field gets a StringField (exact match), all values feed a synthetic
+          <code>_text</code> TextField (analysed full-text), and the row's JSON is stored as
+          <code>_source</code> when <code>storeSource: true</code>.
+        </small></p>
+      </article>
     </article>
   </section>
 

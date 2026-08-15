@@ -1770,6 +1770,101 @@ document.addEventListener('DOMContentLoaded', () => {
 
 let meshVizTimer = null;
 
+// ================================================================ SEARCH TAB
+
+async function refreshSearchTab() {
+  await loadSearchIndexes();
+  const runBtn = $('#search-run');
+  if (runBtn && !runBtn._wired) {
+    runBtn._wired = true;
+    runBtn.addEventListener('click', runSearch);
+  }
+}
+
+async function loadSearchIndexes() {
+  let indexes = [];
+  try { indexes = await api('/mesh/search'); }
+  catch (e) {
+    $('#search-index-list').innerHTML =
+        `<p><small style="color:var(--danger)">error: ${esc(e.message)}</small></p>`;
+    return;
+  }
+  const countEl = $('#search-index-count');
+  if (countEl) countEl.textContent = `${indexes.length} indexes`;
+  if (!indexes.length) {
+    $('#search-index-list').innerHTML =
+        `<p class="meta">No Lucene indexes yet. Run a pipeline with a <code>lucene</code> sink first
+         (e.g. the bundled <b>enrich-and-index</b> example).</p>`;
+    return;
+  }
+  $('#search-index-list').innerHTML = indexes.map(i => `
+    <div class="ds-list-item" data-name="${esc(i.name)}"
+         title="${i.docCount >= 0 ? i.docCount + ' documents indexed' : 'index metadata unreadable'}">
+      <div class="name">${esc(i.name)}</div>
+      <span class="meta">${i.docCount >= 0 ? i.docCount + ' docs' : '(?)'}</span>
+    </div>
+  `).join('');
+  $$('#search-index-list .ds-list-item').forEach(el => {
+    el.addEventListener('click', () => {
+      $$('#search-index-list .ds-list-item').forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+      $('#search-index').value = el.dataset.name;
+      $('#search-q').focus();
+    });
+  });
+}
+
+async function runSearch() {
+  const idx = ($('#search-index').value || '').trim();
+  const q   = ($('#search-q').value || '').trim();
+  const lim = parseInt($('#search-limit').value, 10) || 20;
+  if (!idx) { plToast('pick an index from the list first', 'warn'); return; }
+  const runBtn = $('#search-run');
+  runBtn.disabled = true;
+  runBtn.textContent = '⋯ Searching';
+  try {
+    const url = `/mesh/search/${encodeURIComponent(idx)}?q=${encodeURIComponent(q)}&limit=${lim}`;
+    const r = await api(url);
+    renderSearchResult(r);
+  } catch (e) {
+    $('#search-result').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = '🔍 Search';
+  }
+}
+
+function renderSearchResult(r) {
+  const host = $('#search-result');
+  if (!host) return;
+  if (!r.hits || !r.hits.length) {
+    host.innerHTML = `<p class="meta">No hits (${r.totalDocsInIndex} docs in index, took ${r.tookMs} ms)
+                      for <code>${esc(r.query || '(match all)')}</code>.</p>`;
+    return;
+  }
+  const cols = Array.from(new Set(r.hits.flatMap(h => Object.keys(h))));
+  host.innerHTML = `
+    <div class="meta" style="margin-bottom: 0.4rem;">
+      <b>${r.hitCount}</b> hits · ${r.totalDocsInIndex} total docs · ${r.tookMs} ms ·
+      query <code>${esc(r.query || '(match all)')}</code>
+    </div>
+    <div style="overflow-x: auto; max-height: 500px; overflow-y: auto;">
+      <table style="width:100%; font-size: 0.75rem;">
+        <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${r.hits.map(h => `
+          <tr>${cols.map(c => {
+            const v = h[c];
+            if (v == null) return '<td class="meta">—</td>';
+            const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            return `<td>${esc(s.length > 80 ? s.slice(0, 77) + '…' : s)}</td>`;
+          }).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ================================================================ MESH VIZ
+
 async function refreshMeshViz() {
   await drawMeshViz();
   if (meshVizTimer) clearInterval(meshVizTimer);
