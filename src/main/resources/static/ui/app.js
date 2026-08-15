@@ -1808,6 +1808,22 @@ async function loadBundledExamples() {
   }
 }
 
+// Track per-node rowsOut samples so we can compute rows/sec throughput
+// on running jobs. Keyed by "<jobId>:<nodeId>".
+const plRateSamples = {};
+
+function computeRate(jobId, nodeId, rowsOut) {
+  const k = jobId + ':' + nodeId;
+  const now = Date.now();
+  const prev = plRateSamples[k];
+  plRateSamples[k] = { rowsOut, at: now };
+  if (!prev) return null;
+  const dt = (now - prev.at) / 1000;
+  if (dt < 0.3) return null;   // too soon
+  const dr = rowsOut - prev.rowsOut;
+  return dr < 0 ? null : Math.round(dr / dt);
+}
+
 async function refreshRunHistory() {
   let runs = [];
   try { runs = await api('/mesh/jobs'); } catch (_) { }
@@ -1826,10 +1842,16 @@ async function refreshRunHistory() {
         started ${esc(fmtTime(r.startedAt))}${r.finishedAt ? ' · finished ' + esc(fmtTime(r.finishedAt)) : ''}
       </div>
       <div style="margin-top: 0.4rem; display:flex; gap: 0.3rem; flex-wrap: wrap;">
-        ${(r.nodes || []).map(n => `
-          <span class="pl-mini-node pl-state-${esc(n.state.toLowerCase())}" title="${esc(n.id)}: ${esc(n.state)} · ${n.rowsIn}→${n.rowsOut}">
-            ${esc(n.id)} ${n.rowsOut > 0 ? '· ' + n.rowsOut : ''}
-          </span>`).join('')}
+        ${(r.nodes || []).map(n => {
+          const rate = (r.state === 'RUNNING' && n.state === 'RUNNING')
+              ? computeRate(r.jobId, n.id, n.rowsOut) : null;
+          const rateChip = rate != null ? ` · ${rate}/s` : '';
+          return `
+          <span class="pl-mini-node pl-state-${esc(n.state.toLowerCase())}"
+                title="${esc(n.id)}: ${esc(n.state)} · ${n.rowsIn}→${n.rowsOut}${rate!=null?' · '+rate+' rows/sec':''}">
+            ${esc(n.id)} ${n.rowsOut > 0 ? '· ' + n.rowsOut : ''}${rateChip}
+          </span>`;
+        }).join('')}
       </div>
       ${r.state === 'RUNNING' ? `
         <div style="margin-top: 0.4rem;">
