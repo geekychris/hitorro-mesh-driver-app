@@ -193,6 +193,19 @@
             <artifactId>hitorro-mesh-pipelines</artifactId>
             <version>3.0.1</version>
         </dependency>
+        <!-- Pull in the pipelines module's optional adapter deps so the
+             groovy-map / kafka / (jnats is already transitively present
+             via hitorro-mesh-nats) steps work out of the box. -->
+        <dependency>
+            <groupId>org.apache.groovy</groupId>
+            <artifactId>groovy</artifactId>
+            <version>4.0.21</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.6.1</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
