@@ -37,6 +37,8 @@
             title="Cluster topology graph — driver, agents, what runs inside each, how data flows.">Mesh</button>
     <button role="tab" data-target="pipelines"
             title="DAG pipelines — YAML jobs of source → steps → sinks. Also has a form-based builder.">Pipelines</button>
+    <button role="tab" data-target="jobs"
+            title="Persistent job history — every past run with stats, timings, sink counts. Survives driver restarts.">Jobs</button>
     <button role="tab" data-target="search"
             title="Full-text search over pipeline-indexed Lucene indexes.">Search</button>
     <button role="tab" data-target="fleet"
@@ -945,6 +947,44 @@
       </article>
     </dialog>
   </section>
+
+  <!-- ================== JOBS ================== -->
+  <section id="jobs" class="tab-panel">
+    <article>
+      <header style="display:flex; align-items:center; gap:0.4rem;">
+        <span>Job history</span>
+        <small class="meta" id="jobs-count">—</small>
+        <span style="flex:1"></span>
+        <button id="jobs-refresh" type="button" class="secondary outline"
+                style="margin:0; padding:0.1rem 0.5rem; font-size:0.75rem;">↻</button>
+      </header>
+      <p><small class="meta">Persistent NDJSON log at
+        <code>~/.hitorro/pipelines/jobs.ndjson</code> — every completed run is appended
+        as one line. Restarts of the driver replay the tail into memory so this
+        list stays populated. Click any row to expand per-node stats.</small></p>
+      <div id="jobs-list">loading…</div>
+    </article>
+  </section>
+
+  <!-- ================== LOG TAIL MODAL (mesh-viz + jobs) ================== -->
+  <dialog id="mesh-log-dialog" style="width:min(1100px,95vw); max-height:85vh;">
+    <article>
+      <header style="display:flex; align-items:center; gap:0.5rem;">
+        <span><b id="mesh-log-title">Log</b></span>
+        <small class="meta" id="mesh-log-path"></small>
+        <span style="flex:1"></span>
+        <label style="display:flex; align-items:center; gap:0.3rem;">
+          <input id="mesh-log-follow" type="checkbox" checked/>
+          <small>auto-refresh 2s</small>
+        </label>
+        <button id="mesh-log-refresh" style="margin:0; padding:0.15rem 0.9rem;">↻</button>
+        <button id="mesh-log-close"   class="secondary outline"
+                style="margin:0; padding:0.15rem 0.9rem;">Close</button>
+      </header>
+      <pre id="mesh-log-body" style="max-height:65vh; overflow:auto; font-size:0.72rem;
+           line-height:1.25; white-space:pre-wrap; word-break:break-word; margin:0;"></pre>
+    </article>
+  </dialog>
 
   <!-- ================== METRICS ================== -->
   <section id="metrics" class="tab-panel">

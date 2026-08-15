@@ -861,6 +861,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'mesh') refreshMeshViz();
         if (target === 'search') refreshSearchTab();
         if (target === 'fleet') refreshFleetTab();
+        if (target === 'jobs') refreshJobsTab();
       } else if (btn.dataset.view) {
         $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
         $('#' + target, btn.closest('article')).classList.add('active');
@@ -2407,6 +2408,190 @@ async function fleetShowManifest(name, target) {
   } catch (e) { body.textContent = 'error: ' + e.message; }
 }
 
+// ================================================================ JOBS TAB
+
+let jobsTimer = null;
+
+async function refreshJobsTab() {
+  wireJobsHandlers();
+  await loadJobs();
+  if (jobsTimer) clearInterval(jobsTimer);
+  jobsTimer = setInterval(() => {
+    if (!$('#jobs').classList.contains('active')) return;
+    loadJobs();
+  }, 5000);
+}
+
+function wireJobsHandlers() {
+  const btn = $('#jobs-refresh');
+  if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', loadJobs); }
+}
+
+async function loadJobs() {
+  let history = [], running = [];
+  try {
+    [history, running] = await Promise.all([
+      api('/mesh/jobs/history?limit=500'),
+      api('/mesh/jobs'),
+    ]);
+  } catch (e) {
+    $('#jobs-list').innerHTML = `<p style="color:var(--danger)">error: ${esc(e.message)}</p>`;
+    return;
+  }
+  // Merge — running jobs on top, history below. Dedup by jobId.
+  const runningIds = new Set(running.filter(r => r.state === 'RUNNING').map(r => r.jobId));
+  const all = [];
+  running.filter(r => r.state === 'RUNNING').forEach(r => all.push({...r, _running: true}));
+  history.forEach(h => { if (!runningIds.has(h.jobId)) all.push(h); });
+  $('#jobs-count').textContent = `${all.length} jobs — ${runningIds.size} running`;
+  if (!all.length) {
+    $('#jobs-list').innerHTML = '<p class="meta">No jobs yet. Run a bundled example from the Pipelines tab.</p>';
+    return;
+  }
+  $('#jobs-list').innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%; font-size:0.78rem; border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--muted-border-color,#e0e0e0);">
+            <th style="text-align:left; padding:0.3rem;">Job</th>
+            <th style="text-align:left; padding:0.3rem;">State</th>
+            <th style="text-align:left; padding:0.3rem;">Started</th>
+            <th style="text-align:right; padding:0.3rem;">Duration</th>
+            <th style="text-align:right; padding:0.3rem;">Nodes</th>
+            <th style="text-align:right; padding:0.3rem;">Rows out</th>
+            <th style="text-align:left; padding:0.3rem;">Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${all.map((j,i) => jobRowHtml(j,i)).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  all.forEach((j, i) => {
+    const head = $(`#job-row-${i}`);
+    if (head) head.addEventListener('click', () => {
+      const body = $(`#job-body-${i}`);
+      body.hidden = !body.hidden;
+    });
+  });
+}
+
+function jobRowHtml(j, i) {
+  const state = j.state || 'RUNNING';
+  const color = state === 'SUCCEEDED' ? 'var(--ins-color,#4c9)'
+              : state === 'FAILED'    ? 'var(--danger,#c33)'
+              : state === 'RUNNING'   ? '#3af'
+              : state === 'CANCELLED' ? '#c93'
+              : 'var(--muted-color,#888)';
+  const started = j.startedAt || '';
+  const startedShort = started ? started.replace('T',' ').replace(/\.\d+Z?/, '') : '—';
+  const durationMs = j.durationMs != null ? j.durationMs
+                     : (j.finishedAt && j.startedAt
+                        ? new Date(j.finishedAt).getTime() - new Date(j.startedAt).getTime()
+                        : 0);
+  const dur = durationMs > 0 ? fmtDuration(durationMs) : '—';
+  const rowsOut = j.totalRowsOut != null ? j.totalRowsOut
+                 : (j.nodes || []).reduce((s,n) => s + (n.rowsOut||0), 0);
+  const nodeCount = j.nodeCount != null ? j.nodeCount : (j.nodes || []).length;
+  const nodes = j.nodes || [];
+  return `
+    <tr id="job-row-${i}" style="cursor:pointer; border-bottom:1px solid var(--muted-border-color,#eee);">
+      <td style="padding:0.3rem;">
+        <b>${esc(j.jobSpecName || '?')}</b>
+        <br><small class="meta">${esc(j.jobId || '?')}</small>
+      </td>
+      <td style="padding:0.3rem;"><span style="color:${color}; font-weight:bold;">${esc(state)}</span></td>
+      <td style="padding:0.3rem;"><small>${esc(startedShort)}</small></td>
+      <td style="padding:0.3rem; text-align:right;">${dur}</td>
+      <td style="padding:0.3rem; text-align:right;">${nodeCount}</td>
+      <td style="padding:0.3rem; text-align:right;">${rowsOut.toLocaleString()}</td>
+      <td style="padding:0.3rem;"><small style="color:var(--danger);">${j.error ? esc(j.error).slice(0,60) : ''}</small></td>
+    </tr>
+    <tr id="job-body-${i}" hidden>
+      <td colspan="7" style="padding:0.4rem 1rem; background:var(--card-sectioning-background-color,#fafafa);">
+        ${nodes.length ? `
+          <table style="width:100%; font-size:0.72rem;">
+            <thead><tr>
+              <th style="text-align:left;">node</th><th>state</th>
+              <th style="text-align:right;">in</th><th style="text-align:right;">out</th>
+              <th style="text-align:right;">dur</th><th style="text-align:left;">sinks</th>
+              <th style="text-align:left;">assigned</th>
+            </tr></thead>
+            <tbody>${nodes.map(n => nodeRowHtml(n)).join('')}</tbody>
+          </table>` : '<small class="meta">no per-node detail (replayed from history)</small>'}
+      </td>
+    </tr>`;
+}
+function nodeRowHtml(n) {
+  const sc = n.sinkCounts || {};
+  const sinks = Object.entries(sc).map(([k,v]) => `${esc(k)}=${v}`).join(', ');
+  const dur = (n.startedAt && n.finishedAt)
+    ? fmtDuration(new Date(n.finishedAt).getTime() - new Date(n.startedAt).getTime())
+    : '—';
+  return `<tr>
+    <td>${esc(n.id||'?')}</td>
+    <td>${esc(n.state||'?')}</td>
+    <td style="text-align:right;">${(n.rowsIn||0).toLocaleString()}</td>
+    <td style="text-align:right;">${(n.rowsOut||0).toLocaleString()}</td>
+    <td style="text-align:right;">${dur}</td>
+    <td><small class="meta">${sinks}</small></td>
+    <td><small class="meta">${esc(n.assignedAgent||'')}</small></td>
+  </tr>`;
+}
+function fmtDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60_000) return (ms/1000).toFixed(1) + 's';
+  const m = Math.floor(ms/60_000);
+  const s = Math.floor((ms%60_000)/1000);
+  return `${m}m ${s}s`;
+}
+
+// ================================================================ MESH LOG TAIL
+
+let meshLogTimer = null;
+let meshLogComponent = null;
+
+function openMeshLog(component) {
+  const dlg = $('#mesh-log-dialog');
+  if (!dlg) return;
+  meshLogComponent = component;
+  $('#mesh-log-title').textContent = `${component} — log tail`;
+  $('#mesh-log-path').textContent = '';
+  $('#mesh-log-body').textContent = 'loading…';
+  // Wire buttons once
+  const refresh = $('#mesh-log-refresh');
+  const close   = $('#mesh-log-close');
+  if (!refresh._wired) { refresh._wired = true; refresh.addEventListener('click', loadMeshLog); }
+  if (!close._wired)   { close._wired   = true; close.addEventListener('click', () => {
+    if (meshLogTimer) clearInterval(meshLogTimer);
+    meshLogTimer = null;
+    dlg.close();
+  }); }
+  dlg.showModal();
+  loadMeshLog();
+  if (meshLogTimer) clearInterval(meshLogTimer);
+  meshLogTimer = setInterval(() => {
+    if (!dlg.open) return;
+    if (!$('#mesh-log-follow').checked) return;
+    loadMeshLog();
+  }, 2000);
+}
+
+async function loadMeshLog() {
+  if (!meshLogComponent) return;
+  const body = $('#mesh-log-body');
+  try {
+    const r = await api(`/mesh/logs/${encodeURIComponent(meshLogComponent)}?tail=300`);
+    $('#mesh-log-path').textContent = r.path ? '· ' + shortPath(r.path) : '';
+    const scrolled = body.scrollTop + body.clientHeight >= body.scrollHeight - 10;
+    body.textContent = (r.lines || []).join('\n') || '(empty)';
+    if (scrolled) body.scrollTop = body.scrollHeight;
+  } catch (e) {
+    body.textContent = 'error: ' + e.message
+      + (e.responseBody ? '\n' + JSON.stringify(e.responseBody, null, 2) : '');
+  }
+}
+
 // ================================================================ MESH VIZ
 
 async function refreshMeshViz() {
@@ -2708,6 +2893,28 @@ async function drawMeshViz() {
     g.addEventListener('mouseenter', (ev) => showMeshInfo(g, ev));
     g.addEventListener('mousemove',  (ev) => showMeshInfo(g, ev));
     g.addEventListener('mouseleave', hideMeshInfo);
+  });
+  // Click driver / agent boxes → open log-tail modal for that component.
+  // Only wire on the outer group (mesh-driver-g / mesh-agent-g), not on
+  // every card inside — cards would open the wrong log.
+  const meshClick = (comp) => (ev) => {
+    ev.stopPropagation();
+    hideMeshInfo();
+    openMeshLog(comp);
+  };
+  const driverG = document.querySelector('#mesh-viz .mesh-driver-g');
+  if (driverG && !driverG._logWired) {
+    driverG._logWired = true;
+    driverG.style.cursor = 'pointer';
+    driverG.addEventListener('click', meshClick('driver'));
+  }
+  $$('#mesh-viz .mesh-agent-g').forEach(g => {
+    if (g._logWired) return;
+    g._logWired = true;
+    g.style.cursor = 'pointer';
+    // agent id lives in data-info-title
+    const agentId = g.getAttribute('data-info-title');
+    if (agentId) g.addEventListener('click', meshClick(agentId));
   });
 }
 
