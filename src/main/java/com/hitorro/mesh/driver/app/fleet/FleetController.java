@@ -56,6 +56,7 @@ public class FleetController {
             row.put("name", m.name());
             row.put("description", m.description());
             row.put("defaultPort", m.defaultPort());
+            row.put("debugPort", m.debugPort());
             row.put("healthPath", m.healthPath());
             Path jar = FleetRegistry.resolveJar(m);
             row.put("jarPath", jar != null ? jar.toString() : null);
@@ -64,6 +65,15 @@ public class FleetController {
             row.put("alive", probe.ok);
             row.put("probeMs", probe.elapsedMs);
             if (probe.ok && probe.body != null) row.put("healthBody", probe.body);
+            // JDWP surface — same info shown for any fleet member, live or not.
+            Map<String, Object> debug = new LinkedHashMap<>();
+            debug.put("host", "localhost");
+            debug.put("port", m.debugPort());
+            debug.put("connectString", "localhost:" + m.debugPort());
+            debug.put("jdbCommand", FleetRegistry.jdbCommand(m));
+            debug.put("jdwpArg", FleetRegistry.jdwpArg(m));
+            debug.put("jdwpProbeOpen", tcpOpen("localhost", m.debugPort()));
+            row.put("debug", debug);
             FleetProcessManager.Handle h = pm.get(m.name());
             if (h != null) {
                 row.put("managedPid", h.pid());
@@ -122,9 +132,59 @@ public class FleetController {
         String body = switch (target.toLowerCase()) {
             case "orion" -> FleetRegistry.orionManifest(m);
             case "local", "shell" -> FleetRegistry.localLaunchCommand(m);
+            case "intellij", "idea" -> FleetRegistry.intellijRunConfig(m);
             default -> FleetRegistry.k8sManifest(m);
         };
         return ResponseEntity.ok(body);
+    }
+
+    // ─── driver self-debug status ──────────────────────────────────
+
+    /**
+     * Report the driver JVM's own JDWP config (if it was launched with
+     * {@code -agentlib:jdwp=...}). Lets the UI show the driver as
+     * debuggable alongside the fleet.
+     */
+    @GetMapping("/driver-debug")
+    public ResponseEntity<Map<String, Object>> driverDebug() {
+        var rt = java.lang.management.ManagementFactory.getRuntimeMXBean();
+        String jdwp = rt.getInputArguments().stream()
+                .filter(a -> a.startsWith("-agentlib:jdwp="))
+                .findFirst().orElse(null);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("name", "mesh-driver");
+        out.put("pid", rt.getPid());
+        if (jdwp == null) {
+            out.put("jdwpEnabled", false);
+            out.put("hint", "Re-launch driver with -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5085 to enable Remote JVM Debug.");
+            return ResponseEntity.ok(out);
+        }
+        out.put("jdwpEnabled", true);
+        out.put("jdwpArg", jdwp);
+        Integer port = parseJdwpPort(jdwp);
+        if (port != null) {
+            out.put("debugPort", port);
+            out.put("connectString", "localhost:" + port);
+            out.put("jdbCommand", "jdb -attach localhost:" + port);
+            out.put("jdwpProbeOpen", tcpOpen("localhost", port));
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    private static Integer parseJdwpPort(String arg) {
+        int i = arg.indexOf("address=");
+        if (i < 0) return null;
+        String tail = arg.substring(i + "address=".length());
+        int colon = tail.lastIndexOf(':');
+        String portStr = colon < 0 ? tail : tail.substring(colon + 1);
+        try { return Integer.parseInt(portStr.replaceAll("[^0-9]", "")); } catch (Exception e) { return null; }
+    }
+
+    private static boolean tcpOpen(String host, int port) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress(host, port), 300);
+            return true;
+        } catch (Exception e) { return false; }
     }
 
     // ─── helpers ────────────────────────────────────────────────────

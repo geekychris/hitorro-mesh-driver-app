@@ -54,6 +54,7 @@ public class FleetProcessManager {
 
         List<String> cmd = new ArrayList<>();
         cmd.add(javaBin());
+        cmd.add(FleetRegistry.jdwpArg(m));   // JDWP always on for driver-spawned fleet members
         cmd.add("-jar");
         cmd.add(jar.toString());
         cmd.addAll(m.defaultArgs());

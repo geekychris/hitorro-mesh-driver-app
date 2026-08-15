@@ -748,33 +748,109 @@
         </article>
         <article>
           <header>
-            <span>Query</span>
+            <span>Query — assemble the retrieval pipeline</span>
             <span style="flex:1"></span>
             <button id="search-run" type="button"
-                    title="Run the query against the selected index."
-                    style="margin:0;padding:0.15rem 0.9rem;">🔍 Search</button>
+                    title="POST the assembled JVS to /api/retrieval/execute."
+                    style="margin:0;padding:0.15rem 0.9rem;">🔍 Run</button>
           </header>
           <div class="row" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
             <label style="min-width: 4rem;">Index</label>
             <input id="search-index" type="text" placeholder="pick from list ↑" style="flex: 1;"/>
+            <label>Lang</label>
+            <input id="search-lang" type="text" value="en" style="width: 4rem;"/>
           </div>
-          <div class="row" style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.4rem;">
-            <label style="min-width: 4rem;">Query</label>
-            <input id="search-q" type="text"
-                   placeholder="Lucene syntax over _text catch-all — or fielded (iata:LHR)"
-                   style="flex: 1;"
-                   onkeydown="if(event.key==='Enter')document.getElementById('search-run').click()"/>
-          </div>
-          <div class="row" style="display:flex; gap:0.5rem; align-items:center;">
-            <label style="min-width: 4rem;">Limit</label>
-            <input id="search-limit" type="number" value="20" min="1" max="1000" style="width: 6rem;"/>
-            <small class="meta" style="flex: 1;">
-              Empty query = match all. Try <code>heathrow</code>, <code>US</code>, <code>iata:JFK</code>,
-              or <code>altitude_bucket:alpine</code>.
-            </small>
-          </div>
+
+          <details open style="margin-bottom:0.35rem;">
+            <summary><b>search</b> <small class="meta">— IndexRetriever (always participates)</small></summary>
+            <div style="padding:0.35rem 0.6rem;">
+              <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.3rem;">
+                <label style="min-width:4rem;">Query</label>
+                <input id="search-q" type="text" placeholder="Lucene syntax over _text catch-all — or fielded (iata:LHR)"
+                       style="flex:1;"
+                       onkeydown="if(event.key==='Enter')document.getElementById('search-run').click()"/>
+              </div>
+              <div style="display:flex; gap:0.5rem; align-items:center;">
+                <label style="min-width:4rem;">Offset</label>
+                <input id="search-offset" type="number" value="0" min="0" style="width:5rem;"/>
+                <label>Limit</label>
+                <input id="search-limit" type="number" value="20" min="1" max="1000" style="width:5rem;"/>
+                <label>Facets</label>
+                <input id="search-facets" type="text" placeholder="e.g. country,department"
+                       style="flex:1;" title="Comma-separated field names to compute facet counts on"/>
+              </div>
+            </div>
+          </details>
+
+          <details style="margin-bottom:0.35rem;">
+            <summary>
+              <label style="cursor:pointer;">
+                <input id="stage-fetch" type="checkbox"/>
+                <b>fetch</b> <small class="meta">— DocumentRetriever pulls rich JSON from KV store per hit</small>
+              </label>
+            </summary>
+            <div style="padding:0.35rem 0.6rem;">
+              <small class="meta">When enabled, sets <code>query.fetch.enabled = true</code>. If a KV store with the
+                index's name exists (e.g. <code>~/.hitorro/pipelines/kv/&lt;index&gt;/</code>), each hit's key is looked
+                up and the returned doc replaces the Lucene-reconstructed one. If no KV, hits pass through unchanged.</small>
+            </div>
+          </details>
+
+          <details style="margin-bottom:0.35rem;">
+            <summary>
+              <label style="cursor:pointer;">
+                <input id="stage-fixup" type="checkbox"/>
+                <b>fixup</b> <small class="meta">— FixupRetriever applies type-system projections</small>
+              </label>
+            </summary>
+            <div style="padding:0.35rem 0.6rem; display:flex; gap:0.5rem; align-items:center;">
+              <label style="min-width:4rem;">Tags</label>
+              <input id="stage-fixup-tags" type="text" placeholder="e.g. basic,segmented,ner" style="flex:1;"
+                     title="Comma-separated projection tags to apply — matches groups[].tag entries in type defs"/>
+            </div>
+          </details>
+
+          <details style="margin-bottom:0.35rem;">
+            <summary>
+              <label style="cursor:pointer;">
+                <input id="stage-page" type="checkbox"/>
+                <b>page</b> <small class="meta">— PaginationRetriever (client-side page slicing)</small>
+              </label>
+            </summary>
+            <div style="padding:0.35rem 0.6rem; display:flex; gap:0.5rem; align-items:center;">
+              <label style="min-width:4rem;">Rows</label>
+              <input id="stage-page-rows" type="number" value="10" min="1" style="width:5rem;"/>
+              <label>Page</label>
+              <input id="stage-page-page" type="number" value="0" min="0" style="width:5rem;"/>
+              <small class="meta">Applied after DocumentRetriever, before FacetRetriever.</small>
+            </div>
+          </details>
+
+          <details style="margin-bottom:0.35rem;">
+            <summary>
+              <label style="cursor:pointer;">
+                <input id="stage-summarize" type="checkbox"/>
+                <b>summarize</b> <small class="meta">— SummarizationRetriever (needs AIOperations wired on the server)</small>
+              </label>
+            </summary>
+            <div style="padding:0.35rem 0.6rem; display:flex; gap:0.5rem; align-items:center;">
+              <label style="min-width:4rem;">Max docs</label>
+              <input id="stage-summarize-maxdocs" type="number" value="10" min="1" style="width:5rem;"/>
+              <label>Max words</label>
+              <input id="stage-summarize-maxwords" type="number" value="200" min="20" style="width:6rem;"/>
+              <small class="meta">Only fires if the retrieval service has an AIOperations impl available.</small>
+            </div>
+          </details>
+
+          <details style="margin-bottom:0.35rem;">
+            <summary><small class="meta">Live JVS query preview (assembled from the sections above)</small></summary>
+            <pre id="search-query-preview" style="font-size:0.7rem; margin:0.25rem 0.4rem;
+                 max-height:180px; overflow:auto; padding:0.35rem 0.5rem;
+                 background:var(--card-sectioning-background-color,#f5f5f5); border-radius:4px;"></pre>
+          </details>
+
           <div id="search-result" style="margin-top: 0.75rem;">
-            <p class="meta">Pick an index and click 🔍 Search.</p>
+            <p class="meta">Pick an index and click 🔍 Run.</p>
           </div>
         </article>
       </div>

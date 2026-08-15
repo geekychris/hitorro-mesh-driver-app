@@ -25,6 +25,7 @@ public final class FleetRegistry {
             String name,
             String description,
             int defaultPort,
+            int debugPort,
             String healthPath,
             List<Path> jarCandidates,
             Map<String, String> defaultEnv,
@@ -42,13 +43,19 @@ public final class FleetRegistry {
                                 + "Index → Document → Fixup → Pagination → Facet → Summarization). "
                                 + "Shared-mode reads pipeline-produced Lucene + KV from ${HITORRO_PIPELINES_HOME}.",
                         8090,
+                        5090,
                         "/api/retrieval/health",
                         jarCandidatesFor("hitorro-fleet-retrieval", "3.0.1"),
                         Map.of("HITORRO_PIPELINES_HOME", HOME + "/.hitorro/pipelines"),
                         List.of("--hitorro.fleet.retrieval.mode=shared", "--server.port=8090")
                 )
-                // future fleet members line up here
+                // future fleet members line up here (bump debugPort by 1 each)
         );
+    }
+
+    /** JDWP agent arg for a member — attach with jdb / IntelliJ Remote JVM Debug. */
+    public static String jdwpArg(FleetMember m) {
+        return "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:" + m.debugPort();
     }
 
     public static FleetMember byName(String name) {
@@ -70,6 +77,32 @@ public final class FleetRegistry {
         return null;
     }
 
+    /** IntelliJ IDEA Remote JVM Debug run-configuration XML for a member. */
+    public static String intellijRunConfig(FleetMember m) {
+        return """
+                <!-- Save as .idea/runConfigurations/Debug_%s.xml at the repo root,
+                     then Run → Debug → "Debug %s". Or add manually via
+                     Run → Edit Configurations → + → Remote JVM Debug and paste
+                     host=localhost port=%d, use "Attach to remote JVM". -->
+                <component name="ProjectRunConfigurationManager">
+                  <configuration default="false" name="Debug %s" type="Remote">
+                    <option name="USE_SOCKET_TRANSPORT" value="true" />
+                    <option name="SERVER_MODE" value="false" />
+                    <option name="SHMEM_ADDRESS" />
+                    <option name="HOST" value="localhost" />
+                    <option name="PORT" value="%d" />
+                    <option name="AUTO_RESTART" value="false" />
+                    <RunnerSettings RunnerId="Debug">
+                      <option name="DEBUG_PORT" value="%d" />
+                      <option name="LOCAL" value="false" />
+                    </RunnerSettings>
+                    <method v="2" />
+                  </configuration>
+                </component>
+                """.formatted(m.name(), m.name(), m.debugPort(),
+                              m.name(), m.debugPort(), m.debugPort());
+    }
+
     /**
      * Materialize a K8s Deployment+Service manifest for a fleet member.
      * Values are plain (no Helm templating) — user can pipe to kubectl.
@@ -79,7 +112,10 @@ public final class FleetRegistry {
                 .map(e -> "            - name: " + e.getKey() + "\n              value: " + quote(e.getValue()))
                 .collect(Collectors.joining("\n"));
         String argsBlock = Stream.concat(
-                Stream.of("- \"-jar\"", "- \"/opt/hitorro/" + m.name() + ".jar\""),
+                Stream.of(
+                    "- " + quote(jdwpArg(m)),
+                    "- \"-jar\"",
+                    "- \"/opt/hitorro/" + m.name() + ".jar\""),
                 m.defaultArgs().stream().map(a -> "- " + quote(a))
         ).collect(Collectors.joining("\n            "));
         return """
@@ -110,6 +146,8 @@ public final class FleetRegistry {
                           ports:
                             - containerPort: %d
                               name: rest
+                            - containerPort: %d
+                              name: jdwp
                           readinessProbe:
                             httpGet: { path: %s, port: rest }
                             initialDelaySeconds: 5
@@ -141,13 +179,18 @@ public final class FleetRegistry {
                     - name: rest
                       port: %d
                       targetPort: rest
+                    - name: jdwp
+                      port: %d
+                      targetPort: jdwp
+                # Debug: kubectl port-forward svc/hitorro-%s %d:%d — then attach IntelliJ Remote JVM Debug to localhost:%d
                 """.formatted(
                 m.name(), m.name(), m.name(),
                 m.name(), m.name(), m.name(), m.name(),
                 m.name(), m.name(),
-                argsBlock, envBlock, m.defaultPort(),
+                argsBlock, envBlock, m.defaultPort(), m.debugPort(),
                 m.healthPath(),
-                m.name(), m.name(), m.name(), m.defaultPort());
+                m.name(), m.name(), m.name(), m.defaultPort(), m.debugPort(),
+                m.name(), m.debugPort(), m.debugPort(), m.debugPort());
     }
 
     /**
@@ -159,7 +202,10 @@ public final class FleetRegistry {
                 .map(e -> "    " + e.getKey() + ": " + quote(e.getValue()))
                 .collect(Collectors.joining("\n"));
         String argsBlock = Stream.concat(
-                Stream.of("- \"-jar\"", "- \"${HITORRO_JARS}/" + m.name() + ".jar\""),
+                Stream.of(
+                    "- " + quote(jdwpArg(m)),
+                    "- \"-jar\"",
+                    "- \"${HITORRO_JARS}/" + m.name() + ".jar\""),
                 m.defaultArgs().stream().map(a -> "- " + quote(a))
         ).collect(Collectors.joining("\n    "));
         return """
@@ -186,6 +232,9 @@ public final class FleetRegistry {
                     - name: rest
                       port: %d
                       protocol: tcp
+                    - name: jdwp
+                      port: %d
+                      protocol: tcp
                   capabilities:
                     - hitorro-fleet-%s
                   resources:
@@ -204,15 +253,17 @@ public final class FleetRegistry {
                         port: %d
                       intervalSec: 3
                       timeoutSec: 2
+                # Debug: orion port-forward svc/hitorro-%s %d:%d — then attach IntelliJ Remote JVM Debug to localhost:%d
                 """.formatted(
                 m.name(), m.name(),
                 m.name(), m.name(),
-                argsBlock, envBlock, m.defaultPort(),
+                argsBlock, envBlock, m.defaultPort(), m.debugPort(),
                 m.name(), m.defaultPort(),
-                m.healthPath(), m.defaultPort());
+                m.healthPath(), m.defaultPort(),
+                m.name(), m.debugPort(), m.debugPort(), m.debugPort());
     }
 
-    /** Materialize a local-dev launch command for a fleet member. */
+    /** Materialize a local-dev launch command for a fleet member (JDWP on). */
     public static String localLaunchCommand(FleetMember m) {
         Path jar = resolveJar(m);
         String jarPath = jar != null ? jar.toString() : "<jar-not-found: build " + m.name() + " first>";
@@ -220,7 +271,15 @@ public final class FleetRegistry {
                 .map(e -> e.getKey() + "=" + quote(e.getValue()))
                 .collect(Collectors.joining(" "));
         String args = String.join(" ", m.defaultArgs());
-        return "%sjava -jar %s %s".formatted(env.isEmpty() ? "" : env + " ", jarPath, args);
+        return "%sjava %s -jar %s %s".formatted(
+                env.isEmpty() ? "" : env + " ",
+                jdwpArg(m),
+                jarPath, args);
+    }
+
+    /** {@code jdb} attach command. */
+    public static String jdbCommand(FleetMember m) {
+        return "jdb -attach localhost:" + m.debugPort();
     }
 
     /** Minimal shell escape — good enough for the values we emit. */

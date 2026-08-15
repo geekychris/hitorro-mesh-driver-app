@@ -1776,12 +1776,73 @@ let meshVizTimer = null;
 
 async function refreshSearchTab() {
   wireSearchBackendToggle();
+  wireStageBuilder();
   await loadSearchIndexes();
   const runBtn = $('#search-run');
   if (runBtn && !runBtn._wired) {
     runBtn._wired = true;
     runBtn.addEventListener('click', runSearch);
   }
+  updateQueryPreview();
+}
+
+function wireStageBuilder() {
+  const inputs = [
+    '#search-q', '#search-offset', '#search-limit', '#search-facets', '#search-lang',
+    '#stage-fetch',
+    '#stage-fixup', '#stage-fixup-tags',
+    '#stage-page', '#stage-page-rows', '#stage-page-page',
+    '#stage-summarize', '#stage-summarize-maxdocs', '#stage-summarize-maxwords',
+  ];
+  inputs.forEach(sel => {
+    const el = $(sel);
+    if (!el || el._wiredPreview) return;
+    el._wiredPreview = true;
+    el.addEventListener('input', updateQueryPreview);
+    el.addEventListener('change', updateQueryPreview);
+  });
+}
+
+function buildRetrievalQuery() {
+  const q = ($('#search-q')?.value || '').trim() || '*:*';
+  const offset = parseInt($('#search-offset')?.value, 10) || 0;
+  const limit = parseInt($('#search-limit')?.value, 10) || 20;
+  const facetsRaw = ($('#search-facets')?.value || '').trim();
+  const facets = facetsRaw ? facetsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const lang = ($('#search-lang')?.value || 'en').trim();
+
+  const query = {
+    search: {query: q, offset, limit, lang, facets}
+  };
+  if ($('#stage-fetch')?.checked) {
+    query.fetch = {enabled: true};
+  }
+  if ($('#stage-fixup')?.checked) {
+    const tags = ($('#stage-fixup-tags')?.value || '').trim()
+                 .split(',').map(s => s.trim()).filter(Boolean);
+    query.fixup = {tags: tags.length ? tags : ['basic']};
+  }
+  if ($('#stage-page')?.checked) {
+    query.page = {
+      rows: parseInt($('#stage-page-rows')?.value, 10) || 10,
+      page: parseInt($('#stage-page-page')?.value, 10) || 0,
+    };
+  }
+  if ($('#stage-summarize')?.checked) {
+    query.summarize = {
+      maxDocs:  parseInt($('#stage-summarize-maxdocs')?.value, 10) || 10,
+      maxWords: parseInt($('#stage-summarize-maxwords')?.value, 10) || 200,
+    };
+  }
+  return query;
+}
+
+function updateQueryPreview() {
+  const pre = $('#search-query-preview');
+  if (!pre) return;
+  const idx = ($('#search-index')?.value || '<pick an index>').trim();
+  const body = {indexName: idx, query: buildRetrievalQuery()};
+  pre.textContent = JSON.stringify(body, null, 2);
 }
 
 function wireSearchBackendToggle() {
@@ -1856,6 +1917,7 @@ async function loadSearchIndexes() {
       $$('#search-index-list .ds-list-item').forEach(x => x.classList.remove('active'));
       el.classList.add('active');
       $('#search-index').value = el.dataset.name;
+      updateQueryPreview();
       $('#search-q').focus();
     });
   });
@@ -1866,16 +1928,14 @@ async function runSearch() {
   const q   = ($('#search-q').value || '').trim();
   const lim = parseInt($('#search-limit').value, 10) || 20;
   if (!idx) { plToast('pick an index from the list first', 'warn'); return; }
+  updateQueryPreview();
   const runBtn = $('#search-run');
   runBtn.disabled = true;
-  runBtn.textContent = '⋯ Searching';
+  runBtn.textContent = '⋯ Running';
   const fleet = fleetBase();
   try {
     if (fleet) {
-      const body = {
-        indexName: idx,
-        query: {search: {query: q || '*:*', limit: lim, facets: []}}
-      };
+      const body = {indexName: idx, query: buildRetrievalQuery()};
       const resp = await fetch(`${fleet}/api/retrieval/execute`, {
         method: 'POST', mode: 'cors',
         headers: {'content-type': 'application/json'},
@@ -1891,7 +1951,7 @@ async function runSearch() {
     $('#search-result').innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
   } finally {
     runBtn.disabled = false;
-    runBtn.textContent = '🔍 Search';
+    runBtn.textContent = '🔍 Run';
   }
 }
 
@@ -2040,14 +2100,19 @@ function wireFleetHandlers() {
 }
 
 async function loadFleetServices() {
-  let services = [];
-  try { services = await api('/mesh/fleet/services'); }
-  catch (e) {
+  let services = [], driverDbg = null;
+  try {
+    [services, driverDbg] = await Promise.all([
+      api('/mesh/fleet/services'),
+      api('/mesh/fleet/driver-debug').catch(() => null),
+    ]);
+  } catch (e) {
     $('#fleet-list').innerHTML = `<p style="color:var(--danger)">error: ${esc(e.message)}</p>`;
     return;
   }
   $('#fleet-last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
-  if (!services.length) {
+  const driverRow = driverRowHtml(driverDbg);
+  if (!services.length && !driverRow) {
     $('#fleet-list').innerHTML = '<p class="meta">No fleet members registered.</p>';
     return;
   }
@@ -2059,12 +2124,14 @@ async function loadFleetServices() {
             <th>Member</th>
             <th>Port</th>
             <th>Status</th>
+            <th>Debug (JDWP)</th>
             <th>Managed PID / Uptime</th>
             <th>Jar</th>
-            <th style="text-align:right; min-width: 21rem;">Actions</th>
+            <th style="text-align:right; min-width: 24rem;">Actions</th>
           </tr>
         </thead>
         <tbody>
+          ${driverRow}
           ${services.map(fleetRowHtml).join('')}
         </tbody>
       </table>
@@ -2076,7 +2143,36 @@ async function loadFleetServices() {
     $(`#fleet-k8s-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'k8s'));
     $(`#fleet-orion-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'orion'));
     $(`#fleet-local-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'local'));
+    $(`#fleet-idea-${s.name}`)?.addEventListener('click', () => fleetShowManifest(s.name, 'intellij'));
+    $(`#fleet-dbg-${s.name}`)?.addEventListener('click', () => fleetShowDebug(s.debug, s.name));
   });
+  if (driverDbg && driverDbg.jdwpEnabled) {
+    $('#fleet-dbg-mesh-driver')?.addEventListener('click',
+      () => fleetShowDebug({host:'localhost', port:driverDbg.debugPort, connectString:driverDbg.connectString,
+                            jdbCommand:driverDbg.jdbCommand, jdwpArg:driverDbg.jdwpArg,
+                            jdwpProbeOpen:driverDbg.jdwpProbeOpen}, 'mesh-driver'));
+  }
+}
+
+function driverRowHtml(d) {
+  if (!d) return '';
+  const dbgCell = d.jdwpEnabled
+    ? `<a href="#" id="fleet-dbg-mesh-driver" title="Connection details + IntelliJ hint"
+         style="text-decoration:none;">
+         <code>:${d.debugPort}</code> ${d.jdwpProbeOpen
+            ? '<span style="color:var(--ins-color,#4c9);">●</span>'
+            : '<span style="color:var(--muted-color,#888);">○</span>'}
+         <small class="meta">jdb / IntelliJ</small></a>`
+    : `<small class="meta" title="Restart driver with -agentlib:jdwp=...address=*:5085 to enable">not enabled</small>`;
+  return `<tr style="background:rgba(0,120,255,0.03);">
+    <td><b>mesh-driver</b><br><small class="meta">this JVM (query planner + dispatcher + Fleet panel)</small></td>
+    <td><code>8085</code></td>
+    <td><span title="you're talking to it right now" style="color:var(--ins-color,#4c9); font-weight:bold;">● UP</span></td>
+    <td>${dbgCell}</td>
+    <td>PID <code>${d.pid}</code></td>
+    <td><small class="meta">managed by mesh-up.sh (or however you launch it)</small></td>
+    <td style="text-align:right;"><small class="meta">not managed here — Fleet actions only apply to fleet-* members</small></td>
+  </tr>`;
 }
 
 function fleetRowHtml(s) {
@@ -2091,31 +2187,71 @@ function fleetRowHtml(s) {
   const jar = s.jarFound
     ? `<small class="meta" title="${esc(s.jarPath)}">${esc(shortPath(s.jarPath))}</small>`
     : `<small style="color:var(--warn,#c93);">jar missing — build first</small>`;
+  const dbg = s.debug ? (s.debug.jdwpProbeOpen
+    ? `<a href="#" id="fleet-dbg-${esc(s.name)}" style="text-decoration:none;"
+         title="Attach jdb or IntelliJ Remote JVM Debug"><code>:${s.debug.port}</code>
+         <span style="color:var(--ins-color,#4c9);">●</span>
+         <small class="meta">jdb / IntelliJ</small></a>`
+    : `<a href="#" id="fleet-dbg-${esc(s.name)}" style="text-decoration:none;"
+         title="Debug port not listening — service down or JDWP not on"><code>:${s.debug.port}</code>
+         <span style="color:var(--muted-color,#888);">○</span>
+         <small class="meta">not listening</small></a>`) : '';
   const canStart = s.jarFound && !s.alive;
   const canStop  = !!s.managedPid;
   return `<tr>
     <td><b>${esc(s.name)}</b><br><small class="meta">${esc(s.description || '')}</small></td>
     <td><code>${s.defaultPort}</code></td>
     <td>${dot}</td>
+    <td>${dbg}</td>
     <td>${managed}</td>
     <td>${jar}</td>
     <td style="text-align:right; white-space:nowrap;">
       <button id="fleet-start-${esc(s.name)}" ${canStart?'':'disabled'}
               style="margin:0 0.15rem; padding:0.1rem 0.5rem;"
-              title="${canStart?'Spawn java -jar in the driver JVM':'Already up, or jar missing'}">▶ start</button>
+              title="${canStart?'Spawn java -jar in the driver JVM (JDWP enabled)':'Already up, or jar missing'}">▶ start</button>
       <button id="fleet-stop-${esc(s.name)}" ${canStop?'':'disabled'} class="secondary outline"
               style="margin:0 0.15rem; padding:0.1rem 0.5rem;"
               title="Kill the process the driver spawned">■ stop</button>
       <button id="fleet-logs-${esc(s.name)}" class="secondary outline"
               style="margin:0 0.15rem; padding:0.1rem 0.5rem;">📜 logs</button>
       <button id="fleet-local-${esc(s.name)}" class="secondary outline"
-              style="margin:0 0.15rem; padding:0.1rem 0.5rem;" title="Shell one-liner">$_ cli</button>
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;" title="Shell one-liner (JDWP on)">$_ cli</button>
+      <button id="fleet-idea-${esc(s.name)}" class="secondary outline"
+              style="margin:0 0.15rem; padding:0.1rem 0.5rem;" title="IntelliJ IDEA run-configuration XML">💡 IntelliJ</button>
       <button id="fleet-k8s-${esc(s.name)}" class="secondary outline"
               style="margin:0 0.15rem; padding:0.1rem 0.5rem;">☸ k8s</button>
       <button id="fleet-orion-${esc(s.name)}" class="secondary outline"
               style="margin:0 0.15rem; padding:0.1rem 0.5rem;">⊛ orion</button>
     </td>
   </tr>`;
+}
+
+function fleetShowDebug(dbg, name) {
+  if (!dbg) return;
+  const dlg = $('#fleet-manifest-dialog');
+  $('#fleet-manifest-title').textContent = `Debug info — ${name}`;
+  const body = $('#fleet-manifest-body');
+  const intelliJ =
+    `IntelliJ IDEA:\n` +
+    `  Run → Edit Configurations → + → Remote JVM Debug\n` +
+    `  Debugger mode:  Attach to remote JVM\n` +
+    `  Host:           ${dbg.host}\n` +
+    `  Port:           ${dbg.port}\n` +
+    `  Transport:      Socket\n` +
+    `  JDK 9+ VM args: ${dbg.jdwpArg}\n`;
+  const listening = dbg.jdwpProbeOpen
+    ? '● port ' + dbg.port + ' is LISTENING\n'
+    : '○ port ' + dbg.port + ' is NOT LISTENING — process down or JDWP not enabled\n\n';
+  body.textContent =
+    `# ${name} — JDWP debug\n\n` +
+    listening + '\n' +
+    `Connect string:   ${dbg.connectString}\n` +
+    `Launched with:    ${dbg.jdwpArg}\n\n` +
+    `jdb (command-line JVM debugger):\n  ${dbg.jdbCommand}\n\n` +
+    intelliJ + '\n' +
+    `For K8s: kubectl port-forward svc/hitorro-${name} ${dbg.port}:${dbg.port}\n` +
+    `For Orion: orion port-forward svc/hitorro-${name} ${dbg.port}:${dbg.port}\n`;
+  dlg.showModal();
 }
 
 function shortPath(p) {
