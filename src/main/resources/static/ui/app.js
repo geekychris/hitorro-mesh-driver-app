@@ -1791,80 +1791,104 @@ async function drawMeshViz() {
     return;
   }
 
+  // Data-flow narrative panel below the SVG.
+  const flowsEl = $('#mesh-flows');
+  if (flowsEl) {
+    const flowsHtml = Object.entries(topo.dataFlow || {}).map(([k, v]) =>
+      `<div style="margin:0.35rem 0;"><b style="color:var(--primary-mesh);">${esc(k)}:</b> ${esc(v)}</div>`).join('');
+    flowsEl.innerHTML = flowsHtml || '<span class="meta">no flow info</span>';
+  }
+
   const svg = $('#mesh-viz');
   const W = svg.clientWidth || 900;
   const agents = topo.agents || [];
   const nAgents = Math.max(1, agents.length);
 
-  // Layout constants — column per agent, rows for card stacks inside.
-  const COL_W       = Math.min(320, Math.max(200, Math.floor((W - 40) / nAgents)));
-  const DRIVER_H    = 70;
-  const AGENT_HDR_H = 44;
-  const CARD_H      = 26;
-  const CARD_GAP    = 4;
+  const COL_W       = Math.min(360, Math.max(260, Math.floor((W - 40) / nAgents)));
+  const DRIVER_H    = 96;
+  const AGENT_HDR_H = 68;
+  const CARD_H      = 30;
+  const CARD_GAP    = 5;
   const PADDING     = 20;
-  const GAP_TB      = 60;   // vertical gap between driver + agent rows
+  const GAP_TB      = 90;
 
-  // Build the group set of active pipeline nodes for pulsing display.
   const runningJobs = (jobs || []).filter(j => j.state === 'RUNNING');
-  const runningNodesByAgent = {};  // "auto" for local driver-only nodes today
+  const runningNodesByAgent = {};
   runningJobs.forEach(j => {
     (j.nodes || []).filter(n => n.state === 'RUNNING').forEach(n => {
-      // Phase 1 runs on the driver; when Phase 2 scheduler lands nodes get
-      // an "agent" tag and this bucketing changes accordingly.
       const key = n.assignedAgent || '__driver__';
       (runningNodesByAgent[key] = runningNodesByAgent[key] || [])
           .push({ jobId: j.jobId, jobName: j.jobSpecName, ...n });
     });
   });
 
-  // Ordered card list per agent: partitions first, then broadcasts.
+  // Building-block cards per agent — pulled directly from topology payload.
   const broadcasts = topo.broadcasts || [];
   const cardsByAgent = agents.map(a => {
     const cards = [];
+    (a.buildingBlocks || []).forEach(b => {
+      const lname = (b.name || '').toLowerCase();
+      let kind = 'generic';
+      if (lname.includes('partition')) kind = 'partition';
+      else if (lname.includes('broadcast')) kind = 'broadcast-summary';
+      else if (lname.includes('pipeline')) kind = 'pipeline-cap';
+      else if (lname.includes('sql')) kind = 'sql';
+      else if (lname.includes('task')) kind = 'task';
+      else if (lname.includes('nats')) kind = 'nats';
+      cards.push({ kind, label: b.name, desc: b.desc });
+    });
     (a.partitions || []).forEach(p => cards.push({
-      kind: 'partition', label: `${p.table}[${p.key}]`,
+      kind: 'partition-detail',
+      label: `→ ${p.table}[${p.key}]`,
+      desc: `Partition of "${p.table}" identified by key "${p.key}". Scans of ${p.table} filtered to this key route here.`,
     }));
-    // Broadcast is on every agent conceptually — show one collapsed marker.
-    if (broadcasts.length) {
-      cards.push({ kind: 'broadcast-summary',
-                   label: `${broadcasts.length} broadcast tables` });
-    }
-    if (a.hasPipelineNode) {
-      cards.push({ kind: 'pipeline-cap', label: '+ pipeline-node' });
-    }
     return { agent: a, cards };
   });
 
   const maxCards = Math.max(1, ...cardsByAgent.map(x => x.cards.length),
                             ...Object.values(runningNodesByAgent).map(a => a.length));
   const agentCol_H = AGENT_HDR_H + (CARD_H + CARD_GAP) * (maxCards + 2) + 20;
-  const totalH = DRIVER_H + GAP_TB + agentCol_H + 20;
+  const totalH = DRIVER_H + GAP_TB + agentCol_H + 40;
   svg.setAttribute('height', totalH);
 
-  // Preserve the defs from the initial HTML — grab their outer HTML then
-  // rebuild the rest of the SVG content on each refresh so incoming CSS
-  // transitions apply.
   const defs = svg.querySelector('defs');
   const defsHtml = defs ? defs.outerHTML : '';
-
   let body = defsHtml;
 
-  // ---- Driver box (centred, top) ----
-  const driverW = 220;
+  // ---- Driver box (hoverable) ----
+  const driverW = 300;
   const driverX = (W - driverW) / 2;
+  const driverDesc   = topo.driver?.description || '';
+  const driverBlocks = topo.driver?.buildingBlocks || [];
   body += `
-    <g class="mesh-driver-g" transform="translate(${driverX}, ${PADDING})">
+    <g class="mesh-driver-g mesh-hoverable" transform="translate(${driverX}, ${PADDING})"
+       data-info-title="DRIVER"
+       data-info-desc="${esc(driverDesc)}"
+       data-info-blocks='${esc(JSON.stringify(driverBlocks))}'>
       <rect class="mesh-box mesh-driver" width="${driverW}" height="${DRIVER_H}" rx="8"/>
-      <text class="mesh-title" x="${driverW/2}" y="24" text-anchor="middle">DRIVER</text>
-      <text class="mesh-sub"   x="${driverW/2}" y="44" text-anchor="middle">
+      <text class="mesh-title" x="${driverW/2}" y="26" text-anchor="middle">DRIVER</text>
+      <text class="mesh-sub"   x="${driverW/2}" y="46" text-anchor="middle">planner · dispatcher · result collector</text>
+      <text class="mesh-sub"   x="${driverW/2}" y="64" text-anchor="middle">
         uptime ${Math.floor((topo.driver?.uptimeMs || 0) / 1000)}s · pipelines: ${runningJobs.length} running
       </text>
-      <text class="mesh-sub"   x="${driverW/2}" y="60" text-anchor="middle">
-        ${broadcasts.length} broadcasts · ${(topo.distributed || []).length} distributed tables
+      <text class="mesh-sub"   x="${driverW/2}" y="82" text-anchor="middle">
+        ${broadcasts.length} broadcasts · ${(topo.distributed || []).length} distributed tables · hover for details
       </text>
     </g>
   `;
+
+  // Broadcast fan-out reminder between driver + agents.
+  if (broadcasts.length && nAgents >= 1) {
+    body += `
+      <g class="mesh-hoverable"
+         data-info-title="Broadcast fan-out (${broadcasts.length} tables)"
+         data-info-desc="Every broadcast table is pre-loaded at every agent — the SAME data replicated everywhere. Small dimension tables travel this way (country_info, iso codes, un-m49-areas, ...) so JOINs against them are constant-time at the agent's local cache. Contrast with partitioned tables where each agent holds a slice.">
+        <text x="${W/2}" y="${PADDING + DRIVER_H + 26}" text-anchor="middle" class="mesh-fanout-label">
+          ⇊ BROADCAST — same ${broadcasts.length} tables at every agent ⇊
+        </text>
+      </g>
+    `;
+  }
 
   // ---- Agent columns ----
   const rowY = PADDING + DRIVER_H + GAP_TB;
@@ -1872,38 +1896,47 @@ async function drawMeshViz() {
   const startX = Math.max(PADDING, (W - totalColsW) / 2);
   cardsByAgent.forEach((entry, i) => {
     const x = startX + i * (COL_W + 20);
-    const agentH = agentCol_H;
     const a = entry.agent;
+    const partCount = (a.partitions || []).length;
     const running = runningNodesByAgent[a.id] || [];
-    // Column background
+
     body += `
-      <g class="mesh-agent-g" transform="translate(${x}, ${rowY})" data-agent="${esc(a.id)}">
-        <rect class="mesh-box mesh-agent" width="${COL_W}" height="${agentH}" rx="8"/>
+      <g class="mesh-agent-g mesh-hoverable" transform="translate(${x}, ${rowY})"
+         data-agent="${esc(a.id)}"
+         data-info-title="${esc(a.id)}"
+         data-info-desc="${esc(a.description || '')}"
+         data-info-caps='${esc(JSON.stringify(Array.from(a.capabilities || [])))}'>
+        <rect class="mesh-box mesh-agent" width="${COL_W}" height="${agentCol_H}" rx="8"/>
         <text class="mesh-title" x="${COL_W/2}" y="22" text-anchor="middle">${esc(a.id)}</text>
-        <text class="mesh-sub"   x="${COL_W/2}" y="38" text-anchor="middle">
-          ${entry.cards.filter(c => c.kind === 'partition').length} partition(s) · ${a.capabilities.length} caps
+        <text class="mesh-sub"   x="${COL_W/2}" y="40" text-anchor="middle">
+          ${partCount} partition(s) · ${a.capabilities.length} capabilities${a.hasPipelineNode ? ' · pipelines' : ''}
         </text>
-        <line x1="8" x2="${COL_W-8}" y1="${AGENT_HDR_H-2}" y2="${AGENT_HDR_H-2}"
+        <text class="mesh-sub"   x="${COL_W/2}" y="56" text-anchor="middle" style="font-style:italic;">
+          hover column for description · hover blocks for detail
+        </text>
+        <line x1="8" x2="${COL_W-8}" y1="${AGENT_HDR_H-4}" y2="${AGENT_HDR_H-4}"
               stroke="rgba(46,134,171,0.2)" stroke-width="1"/>
     `;
-    // Cards inside
     entry.cards.forEach((c, ci) => {
       const y = AGENT_HDR_H + 6 + ci * (CARD_H + CARD_GAP);
       const cls = 'mesh-' + c.kind.replace(/[^a-z-]/g, '');
       body += `
-        <g class="mesh-card ${cls}" transform="translate(6, ${y})">
+        <g class="mesh-card mesh-hoverable ${cls}" transform="translate(6, ${y})"
+           data-info-title="${esc(c.label)}"
+           data-info-desc="${esc(c.desc || '')}">
           <rect width="${COL_W-12}" height="${CARD_H}" rx="4"/>
           <text x="10" y="${CARD_H/2 + 4}" >${esc(c.label)}</text>
         </g>
       `;
     });
-    // Running pipeline node pills at the bottom, if any
     if (running.length) {
       const baseY = AGENT_HDR_H + 6 + entry.cards.length * (CARD_H + CARD_GAP) + 10;
       running.forEach((n, ni) => {
         const y = baseY + ni * (CARD_H + CARD_GAP);
         body += `
-          <g class="mesh-card mesh-pipeline mesh-pulse" transform="translate(6, ${y})">
+          <g class="mesh-card mesh-pipeline mesh-pulse mesh-hoverable" transform="translate(6, ${y})"
+             data-info-title="Running: ${esc(n.id)}"
+             data-info-desc="Node ${esc(n.id)} from job '${esc(n.jobName)}'. Currently RUNNING with ${n.rowsOut||0} rows emitted so far.">
             <rect width="${COL_W-12}" height="${CARD_H}" rx="4"/>
             <text x="10" y="${CARD_H/2 + 4}">▶ ${esc(n.jobName)} · ${esc(n.id)} · ${n.rowsOut||0} rows</text>
           </g>
@@ -1911,40 +1944,44 @@ async function drawMeshViz() {
       });
     }
     body += `</g>`;
-    // Curved edge from driver → agent
+
+    // Driver → agent curved edge with data-flow label.
     const driverBottomX = W / 2;
     const driverBottomY = PADDING + DRIVER_H;
     const agentTopX = x + COL_W / 2;
     const agentTopY = rowY;
     const midY = (driverBottomY + agentTopY) / 2;
+    const edgeClass = partCount > 0 ? 'mesh-edge mesh-edge-partitioned' : 'mesh-edge mesh-edge-broadcast';
+    const edgeLabel = partCount > 0 ? 'SQL tasks (partitioned)' : 'SQL tasks (broadcast-only)';
     body += `
-      <path class="mesh-edge" d="M ${driverBottomX} ${driverBottomY}
-                                 C ${driverBottomX} ${midY}, ${agentTopX} ${midY}, ${agentTopX} ${agentTopY}"
-            fill="none" stroke="var(--primary-mesh)" stroke-width="1.5"
-            marker-end="url(#mesh-arrow)" stroke-dasharray="4 4"/>
+      <g class="mesh-hoverable"
+         data-info-title="${esc(edgeLabel)} · driver → ${esc(a.id)}"
+         data-info-desc="${esc(partCount > 0
+           ? 'The driver hands scan tasks for the ' + a.partitions.map(p=>p.table+'['+p.key+']').join(', ') + ' partition(s) to this agent by publishing TaskDescriptor envelopes on mesh.agent.task.' + a.id + '. Row results flow back on mesh.query.result.<queryId>.<partitionKey>.'
+           : 'This agent holds no distributed table partitions but has the full broadcast dimension cache — the driver still routes broadcast-JOIN sub-plans here.')}">
+        <path class="${edgeClass}" d="M ${driverBottomX} ${driverBottomY}
+                                     C ${driverBottomX} ${midY}, ${agentTopX} ${midY}, ${agentTopX} ${agentTopY}"
+              fill="none" stroke-width="1.5" marker-end="url(#mesh-arrow)" stroke-dasharray="4 4"/>
+        <text x="${(driverBottomX + agentTopX) / 2}" y="${midY - 4}" text-anchor="middle"
+              class="mesh-edge-label">${esc(edgeLabel)}</text>
+      </g>
     `;
   });
 
-  // Also render driver-hosted pipeline nodes as a card row under the driver
-  // for the current Phase-1 execution (nodes run on the driver JVM).
+  // Driver-hosted pipeline strip.
   const driverJobs = runningNodesByAgent['__driver__'] || [];
   if (driverJobs.length) {
-    driverJobs.forEach((n, i) => {
-      const boxW = 200;
-      const boxX = W / 2 - boxW / 2;
-      const boxY = PADDING + DRIVER_H + 8 + i * (CARD_H + CARD_GAP);
-      // Won't render — driverBottomY logic already put agents below.
-      // Instead surface them at the top-left as a floating "on driver" strip.
-    });
-    // Floating strip top-right showing driver-hosted running pipelines.
+    const stripW = 260;
     body += `
-      <g class="mesh-driver-jobs" transform="translate(${W - 240 - PADDING}, ${PADDING})">
-        <rect width="240" height="${Math.min(120, driverJobs.length * (CARD_H + CARD_GAP) + 20)}"
+      <g class="mesh-driver-jobs" transform="translate(${W - stripW - PADDING}, ${PADDING})">
+        <rect width="${stripW}" height="${Math.min(120, driverJobs.length * (CARD_H + CARD_GAP) + 24)}"
               class="mesh-box mesh-driver-jobs-box" rx="6"/>
-        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM</text>
+        <text x="8" y="16" class="mesh-sub" font-weight="600">on driver JVM (Phase 1)</text>
         ${driverJobs.map((n, i) => `
-          <g class="mesh-card mesh-pipeline mesh-pulse" transform="translate(6, ${24 + i * (CARD_H + CARD_GAP)})">
-            <rect width="228" height="${CARD_H}" rx="4"/>
+          <g class="mesh-card mesh-pipeline mesh-pulse mesh-hoverable" transform="translate(6, ${24 + i * (CARD_H + CARD_GAP)})"
+             data-info-title="Running on driver: ${esc(n.id)}"
+             data-info-desc="Pipeline node from job '${esc(n.jobName)}' executing in the driver JVM (not distributed). ${n.rowsOut||0} rows so far. When Phase-2 PipelineScheduler + agents with pipeline-node capability are wired up, these move onto agent columns.">
+            <rect width="${stripW - 12}" height="${CARD_H}" rx="4"/>
             <text x="10" y="${CARD_H/2 + 4}">▶ ${esc(n.jobName)} · ${esc(n.id)}</text>
           </g>
         `).join('')}
@@ -1953,6 +1990,53 @@ async function drawMeshViz() {
   }
 
   svg.innerHTML = body;
+
+  // Wire hover popovers.
+  $$('#mesh-viz .mesh-hoverable').forEach(g => {
+    g.addEventListener('mouseenter', (ev) => showMeshInfo(g, ev));
+    g.addEventListener('mousemove',  (ev) => showMeshInfo(g, ev));
+    g.addEventListener('mouseleave', hideMeshInfo);
+  });
+}
+
+function showMeshInfo(g, ev) {
+  const info = $('#mesh-info');
+  if (!info) return;
+  const title = g.getAttribute('data-info-title') || '';
+  const desc  = g.getAttribute('data-info-desc')  || '';
+  const caps  = g.getAttribute('data-info-caps');
+  const blocks = g.getAttribute('data-info-blocks');
+  let html = `<div class="mesh-info-title">${esc(title)}</div>`;
+  if (desc) html += `<div class="mesh-info-desc">${esc(desc)}</div>`;
+  if (caps) {
+    try {
+      const list = JSON.parse(caps);
+      if (list.length) html += `<div class="mesh-info-list"><b>Capabilities:</b> ${list.map(c=>`<code>${esc(c)}</code>`).join(' ')}</div>`;
+    } catch(_) {}
+  }
+  if (blocks) {
+    try {
+      const list = JSON.parse(blocks);
+      if (list.length) html += `<div class="mesh-info-list"><b>Building blocks:</b><ul>${
+        list.map(b=>`<li><b>${esc(b.name)}</b> — ${esc(b.desc)}</li>`).join('')
+      }</ul></div>`;
+    } catch(_) {}
+  }
+  info.innerHTML = html;
+  info.hidden = false;
+  const wrapper = $('#mesh-viz-wrapper');
+  const rect = wrapper.getBoundingClientRect();
+  const w = 400;
+  const x = Math.min(ev.clientX - rect.left + 12, rect.width - w - 6);
+  const y = Math.min(ev.clientY - rect.top  + 12, rect.height - 260);
+  info.style.left = Math.max(6, x) + 'px';
+  info.style.top  = Math.max(6, y) + 'px';
+  info.style.maxWidth = w + 'px';
+}
+
+function hideMeshInfo() {
+  const info = $('#mesh-info');
+  if (info) info.hidden = true;
 }
 
 // ================================================================ PIPELINES
@@ -2091,6 +2175,143 @@ function fmtTime(iso) {
 
 let plHistoryTimer = null;
 
+// ================================================================ PIPELINE BUILDER
+// Form-based YAML composer. Toggle via 🧱 Builder button on the
+// Pipelines tab. Every control change emits YAML into the editor.
+
+const pbSteps = [];
+
+function pbRender() {
+  const host = $('#pb-steps');
+  if (!host) return;
+  host.innerHTML = pbSteps.map((s, i) => `
+    <div class="pl-step" data-idx="${i}">
+      <div class="pl-step-hdr">
+        <span class="meta"><b>${esc(s.kind)}</b> · step ${i+1}</span>
+        <button type="button" class="remove secondary outline" data-idx="${i}">×</button>
+      </div>
+      ${pbStepBody(s)}
+    </div>
+  `).join('');
+  host.querySelectorAll('.remove').forEach(b => b.addEventListener('click', () => {
+    pbSteps.splice(+b.dataset.idx, 1); pbRender(); pbEmit();
+  }));
+  host.querySelectorAll('[data-field]').forEach(el => el.addEventListener('input', () => {
+    const idx = +el.closest('.pl-step').dataset.idx;
+    pbSteps[idx][el.dataset.field] = el.value;
+    pbEmit();
+  }));
+}
+function pbStepBody(s) {
+  switch (s.kind) {
+    case 'filter':
+      return `<input type="text" data-field="expr" placeholder='e.g. population > 50000000'
+                     value="${esc(s.expr||'')}" style="width:100%"/>`;
+    case 'project':
+      return `<input type="text" data-field="cols" placeholder="comma-separated cols"
+                     value="${esc(s.cols||'')}" style="width:100%"/>`;
+    case 'set-field':
+      return `<div style="display:flex; gap:0.4rem;">
+                <input type="text" data-field="name" placeholder="field name" value="${esc(s.name||'')}" style="flex:1"/>
+                <input type="text" data-field="value" placeholder="value" value="${esc(s.value||'')}" style="flex:2"/>
+              </div>`;
+    case 'groovy-map':
+      return `<textarea data-field="script" placeholder="row.foo = 'bar'; return row" rows="3"
+                        style="width:100%; font-family:ui-monospace,monospace; font-size:0.75rem;">${esc(s.script||'')}</textarea>`;
+    default: return '';
+  }
+}
+function pbEmit() {
+  if (!$('#pb-job')) return '';
+  const jobId = ($('#pb-job').value || 'my-job').trim();
+  const sourceKind = $('#pb-source-kind').value;
+  const sourceArg = ($('#pb-source-arg').value || '').trim();
+  const sinks = [];
+  if ($('#pb-sink-mem').checked)     sinks.push({kind: 'memory-table', name: jobId + '-out'});
+  if ($('#pb-sink-cnt').checked)     sinks.push({kind: 'counting', label: jobId});
+  if ($('#pb-sink-ndjson').checked)  sinks.push({kind: 'ndjson-file', url: `target/${jobId}.ndjson`});
+  if ($('#pb-sink-kv').checked)      sinks.push({kind: 'kvstore', name: jobId + '-kv', keyExpr: 'id'});
+  if ($('#pb-sink-lucene').checked)  sinks.push({kind: 'lucene',  name: jobId + '-idx', storeSource: true});
+  const source = pbBuildSource(sourceKind, sourceArg);
+  const stepYaml = pbSteps.map(s => '        - ' + JSON.stringify(pbCleanStep(s))).join('\n');
+  const sinkYaml = sinks.map(s => '        - ' + JSON.stringify(s)).join('\n');
+  const yaml = [
+    `job: ${jobId}`,
+    'version: "1"',
+    'nodes:',
+    '  - id: main',
+    '    pipeline:',
+    '      source: ' + JSON.stringify(source),
+    pbSteps.length ? '      steps:\n' + stepYaml : '',
+    sinks.length ? '      sinks:\n' + sinkYaml : '',
+  ].filter(Boolean).join('\n');
+  $('#pb-preview').textContent = yaml;
+  return yaml;
+}
+function pbBuildSource(kind, arg) {
+  if (!arg) {
+    if (kind === 'inline') return {kind:'inline', rows:[{msg:'hello'},{msg:'world'}]};
+    return {kind};
+  }
+  switch (kind) {
+    case 'nats':    return {kind:'nats', subject: arg, servers: 'nats://localhost:4222'};
+    case 'kafka':   return {kind:'kafka', bootstrap: 'localhost:9092', topic: arg, groupId: 'ui-builder'};
+    case 'kvstore': return {kind:'kvstore', name: arg};
+    case 'lucene':  return {kind:'lucene', name: arg, query: ''};
+    default:        return {kind, url: arg};
+  }
+}
+function pbCleanStep(s) {
+  if (s.kind === 'project') {
+    return {kind: 'project', cols: (s.cols||'').split(',').map(x=>x.trim()).filter(Boolean)};
+  }
+  if (s.kind === 'set-field') {
+    const v = s.value; const num = Number(v);
+    const value = (!isNaN(num) && v !== '' && v !== null) ? num
+                : (v === 'true') ? true : (v === 'false') ? false : v;
+    return {kind: 'set-field', name: s.name, value};
+  }
+  return {...s};
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const toggle = $('#pl-builder-toggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', () => {
+    const b = $('#pl-builder');
+    b.hidden = !b.hidden;
+    if (!b.hidden) pbEmit();
+  });
+  ['pb-job','pb-source-kind','pb-source-arg',
+   'pb-sink-mem','pb-sink-cnt','pb-sink-ndjson','pb-sink-kv','pb-sink-lucene']
+    .forEach(id => { const el = $('#' + id); if (el) el.addEventListener('input', pbEmit); });
+  $('#pb-add-filter').addEventListener('click', () => { pbSteps.push({kind:'filter', expr:''}); pbRender(); pbEmit(); });
+  $('#pb-add-project').addEventListener('click', () => { pbSteps.push({kind:'project', cols:''}); pbRender(); pbEmit(); });
+  $('#pb-add-setfield').addEventListener('click', () => { pbSteps.push({kind:'set-field', name:'', value:''}); pbRender(); pbEmit(); });
+  $('#pb-add-groovy').addEventListener('click', () => { pbSteps.push({kind:'groovy-map', script:''}); pbRender(); pbEmit(); });
+  $('#pb-emit').addEventListener('click', () => {
+    const y = pbEmit();
+    $('#pl-yaml').value = y;
+    $('#pb-status').textContent = 'loaded into editor · click ▶ Run above';
+    setTimeout(() => { $('#pb-status').textContent = ''; }, 3000);
+  });
+});
+
+/** Lightweight toast for pipeline-tab feedback. Auto-dismisses. */
+function plToast(msg, kind = 'ok') {
+  let el = $('#pl-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'pl-toast';
+    document.body.appendChild(el);
+  }
+  el.className = 'pl-toast pl-toast-' + kind;
+  el.textContent = msg;
+  el.classList.add('pl-toast-visible');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('pl-toast-visible'), 3000);
+}
+
 $(document).body?.addEventListener?.('click', () => { }); // no-op
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2098,7 +2319,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!runBtn) return;
   runBtn.addEventListener('click', async () => {
     const yaml = $('#pl-yaml').value.trim();
-    if (!yaml) { alert('paste or load a job spec first'); return; }
+    if (!yaml) { plToast('paste or load a job spec first', 'warn'); return; }
     runBtn.disabled = true;
     try {
       const r = await api('/mesh/jobs/run', {
@@ -2106,11 +2327,22 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/yaml' },
         body: yaml,
       });
+      // Instant feedback: show status panel, prefill id, start polling
+      // before the job possibly completes so the user sees at least one
+      // state transition.
       $('#pl-status').hidden = false;
       $('#pl-status-id').textContent = r.jobId;
+      $('#pl-status-state').textContent = 'RUNNING';
+      $('#pl-status-state').className = 'badge pl-state-running';
+      $('#pl-dag').innerHTML = '<div class="meta">starting…</div>';
       startPolling(r.jobId);
+      plToast(`▶ started job ${r.jobId}`, 'ok');
+      // Kick the history refresh once so the card appears immediately.
+      refreshRunHistory();
+      // Scroll the status panel into view so the user's eye follows.
+      $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) {
-      alert('run failed: ' + e.message);
+      plToast('run failed: ' + e.message, 'err');
     } finally {
       runBtn.disabled = false;
     }

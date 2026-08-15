@@ -737,6 +737,48 @@ table.result th.row-num-header {
 #mesh-viz .mesh-card.mesh-pipeline-cap rect { fill: #f3e5f5; stroke: #8e44ad; }
 #mesh-viz .mesh-card.mesh-pipeline rect { fill: #fffbf0; stroke: var(--warning); stroke-width: 1.5; }
 #mesh-viz .mesh-card.mesh-pipeline text { fill: #8a5a00; font-weight: 600; }
+#mesh-viz .mesh-card.mesh-sql rect     { fill: #eaf3f8; stroke: var(--primary-mesh); }
+#mesh-viz .mesh-card.mesh-task rect    { fill: #f6f8fb; stroke: #7f8c8d; }
+#mesh-viz .mesh-card.mesh-nats rect    { fill: #fdf5e6; stroke: #d4a017; }
+#mesh-viz .mesh-card.mesh-generic rect { fill: #f6f8fb; stroke: rgba(0,0,0,0.15); }
+#mesh-viz .mesh-card.mesh-partition-detail rect { fill: #fff; stroke: var(--success); stroke-dasharray: 3 2; }
+#mesh-viz .mesh-card.mesh-partition-detail text { fill: var(--success); font-size: 0.7rem; }
+
+/* Highlight on hover so users know the whole element is interactive. */
+#mesh-viz .mesh-hoverable { cursor: help; }
+#mesh-viz .mesh-hoverable:hover rect,
+#mesh-viz .mesh-hoverable:hover .mesh-box { filter: drop-shadow(0 2px 6px rgba(46,134,171,0.35)); }
+
+/* Broadcast fan-out label */
+.mesh-fanout-label {
+  fill: #8a5a00; font-size: 0.72rem; font-weight: 600;
+  font-family: ui-monospace, monospace;
+}
+.mesh-edge-label {
+  fill: var(--muted); font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+}
+#mesh-viz .mesh-edge-partitioned { stroke: var(--success); }
+#mesh-viz .mesh-edge-broadcast   { stroke: var(--primary-mesh); opacity: 0.5; }
+
+/* Hover-popover panel — absolutely positioned inside the viz wrapper. */
+.mesh-info {
+  position: absolute; pointer-events: none;
+  max-width: 380px;
+  background: white; border: 1.5px solid var(--primary-mesh);
+  border-radius: 6px; padding: 0.6rem 0.75rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-size: 0.8rem; z-index: 10;
+}
+.mesh-info-title { font-weight: 700; color: var(--primary-mesh); margin-bottom: 0.3rem; }
+.mesh-info-desc  { line-height: 1.4; margin-bottom: 0.4rem; color: #333; }
+.mesh-info-list  { margin-top: 0.3rem; color: #555; }
+.mesh-info-list ul { margin: 0.25rem 0 0 1rem; padding: 0; }
+.mesh-info-list li { margin: 0.2rem 0; }
+.mesh-info-list code {
+  background: #eef; padding: 0.05rem 0.35rem; border-radius: 3px;
+  font-size: 0.7rem; margin: 0 0.1rem;
+}
 
 /* Pulsing running-pipeline pill */
 #mesh-viz .mesh-pulse rect {
@@ -780,3 +822,36 @@ table.result th.row-num-header {
 #schema-fields dl { margin: 0; }
 #schema-fields dt { font-weight: 600; color: var(--primary-mesh); margin-top: 0.5rem; font-family: var(--pico-font-family-monospace); font-size: 0.85rem; }
 #schema-fields dd { margin: 0 0 0 1rem; color: var(--muted); font-size: 0.85rem; }
+
+/* Pipeline toast — bottom-right, fades in/out */
+.pl-toast {
+  position: fixed; right: 1rem; bottom: 1rem;
+  padding: 0.6rem 1rem; border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  z-index: 1000; opacity: 0; transform: translateY(10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  font-size: 0.85rem; font-weight: 500;
+  pointer-events: none;
+}
+.pl-toast-visible { opacity: 1; transform: translateY(0); }
+.pl-toast-ok   { background: var(--success); color: white; }
+.pl-toast-warn { background: var(--warning); color: white; }
+.pl-toast-err  { background: var(--danger);  color: white; }
+
+/* Pipeline builder card */
+.pl-builder { border-left: 3px solid var(--primary-mesh); padding-left: 0.75rem; }
+.pl-builder-row { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0; flex-wrap: wrap; }
+.pl-builder-row label { font-size: 0.8rem; color: var(--muted); min-width: 5rem; }
+.pl-builder-row input, .pl-builder-row select, .pl-builder-row textarea {
+  padding: 0.15rem 0.5rem; font-size: 0.85rem; margin: 0;
+}
+.pl-step { border: 1px dashed rgba(46,134,171,0.4); border-radius: 4px; padding: 0.4rem; margin: 0.4rem 0; }
+.pl-step-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem; }
+.pl-step-hdr .meta { font-family: ui-monospace, monospace; }
+.pl-step button.remove { padding: 0.05rem 0.4rem; font-size: 0.7rem; margin: 0; }
+.pl-builder-yaml {
+  font-family: ui-monospace, monospace; font-size: 0.75rem;
+  background: #f6f8fb; padding: 0.5rem; border-radius: 4px;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 12rem; overflow-y: auto;
+}

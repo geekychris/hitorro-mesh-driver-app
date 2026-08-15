@@ -467,20 +467,35 @@ public class MeshRestController {
     @GetMapping("/topology")
     public Map<String, Object> topology() {
         Map<String, Object> out = new LinkedHashMap<>();
+
         Map<String, Object> driverInfo = new LinkedHashMap<>();
         driverInfo.put("uptimeMs", java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
+        driverInfo.put("description",
+                "The driver is the query planner + task dispatcher. It receives SQL / pipeline "
+              + "job submissions from clients, plans work into partial SQL tasks (scan → shuffle "
+              + "→ combine) or pipeline nodes, and hands them to agents by capability match. "
+              + "Broadcast tables are registered here so the planner will allow JOINs against them.");
+        driverInfo.put("buildingBlocks", List.of(
+                Map.of("name", "SQL planner",
+                       "desc", "Calcite-based logical planner + jvssql physical rewrites; picks one of 5 plan shapes (simple / two-stage / shuffle-join / shuffle-join-aggregate / streaming-windowed)"),
+                Map.of("name", "Task dispatcher",
+                       "desc", "Publishes TaskDescriptor envelopes to mesh.agent.task.<agentId>; targets agents whose capabilities include every required tag"),
+                Map.of("name", "Pipeline scheduler",
+                       "desc", "Optional (hitorro-mesh-pipelines) — round-robins pipeline nodes across agents advertising pipeline-node capability"),
+                Map.of("name", "Result collector",
+                       "desc", "Subscribes to mesh.query.result.<queryId>.> wildcard; merges per-partition streams, applies driver-side combiner when shuffle-width=0"),
+                Map.of("name", "Table registry",
+                       "desc", "In-memory catalog of broadcast + distributed tables; UI /mesh/tables reads from here")
+        ));
         out.put("driver", driverInfo);
 
-        // Live agents. For each: capabilities → partitions + broadcasts held
-        // + whether the agent runs pipeline-node tasks.
         List<AgentDescriptor> live = driver.agents().agentsWith(List.of("jvssql"));
         List<Map<String, Object>> agents = new java.util.ArrayList<>();
         for (var a : live) {
             Map<String, Object> ag = new LinkedHashMap<>();
             ag.put("id", a.agentId());
+            ag.put("description", describeAgent(a.agentId(), a.capabilities()));
             ag.put("capabilities", a.capabilities());
-            // partition:<table>:<key> capabilities describe which table
-            // partitions this agent holds. Parse them out for the UI.
             List<Map<String, String>> parts = new java.util.ArrayList<>();
             for (String cap : a.capabilities()) {
                 if (cap.startsWith("partition:")) {
@@ -492,11 +507,29 @@ public class MeshRestController {
             }
             ag.put("partitions", parts);
             ag.put("hasPipelineNode", a.capabilities().contains("pipeline-node"));
+
+            List<Map<String, Object>> blocks = new java.util.ArrayList<>();
+            blocks.add(Map.of("name", "NATS transport",
+                    "desc", "Subscribes to mesh.agent.task.<id> and mesh.query.control.>; publishes to mesh.query.result.<queryId>.<partitionKey>"));
+            blocks.add(Map.of("name", "JVS SQL engine",
+                    "desc", "Local jvssql — Calcite parser + planner + row executor over JVS-typed rows; runs the partial SQL from each TaskDescriptor"));
+            blocks.add(Map.of("name", "Task executor",
+                    "desc", "Three run branches: scan-plain (leaf), scan-shuffled (hash-partition rows into bucket subjects), combine (buffer shuffle input, run combine SQL after EOS)"));
+            blocks.add(Map.of("name", "Broadcast cache",
+                    "desc", "Every broadcast table pre-loaded via NDJSON at startup — held in RAM for constant-time JOIN dimension access"));
+            if (!parts.isEmpty()) {
+                blocks.add(Map.of("name", "Partition holdings (" + parts.size() + ")",
+                        "desc", "Distributed table partitions this agent scans; driver's capability match routes scan tasks here"));
+            }
+            if (a.capabilities().contains("pipeline-node")) {
+                blocks.add(Map.of("name", "Pipeline node runner",
+                        "desc", "hitorro-mesh-agent-pipelines subscribes to mesh.agent.pipeline.<id>; runs incoming NodeSpec via a local JobRunner"));
+            }
+            ag.put("buildingBlocks", blocks);
             agents.add(ag);
         }
         out.put("agents", agents);
 
-        // Tables — every broadcast is on every agent; the UI can fan.
         List<String> broadcasts = new java.util.ArrayList<>(driver.tables().broadcastNames());
         java.util.Collections.sort(broadcasts);
         out.put("broadcasts", broadcasts);
@@ -506,7 +539,34 @@ public class MeshRestController {
             distributed.add(Map.of("name", t.name(), "partitions", t.partitions()));
         }
         out.put("distributed", distributed);
+
+        out.put("dataFlow", Map.of(
+                "broadcast",   "Every broadcast table is replicated across every agent — same input to all. Small dimensions travel this way (country_info, iso codes, ...).",
+                "partitioned", "Each partition of a distributed table lives on exactly one agent — different input to different agents, addressed by partitionKey. The docs table has us + eu partitions.",
+                "pipeline",    "Pipeline nodes dispatched by the PipelineScheduler flow via mesh.agent.pipeline.<agentId> subjects — a separate NATS namespace from SQL tasks."
+        ));
+
         return out;
+    }
+
+    /**
+     * Best-effort human description per agent. The smoke stack uses
+     * region-flavoured names (agent-us / agent-eu) as a demo of geographic
+     * partitioning; production deployments override via config.
+     */
+    private String describeAgent(String id, Set<String> capabilities) {
+        String base;
+        if ("agent-us".equals(id)) {
+            base = "Pretend US-region agent from the mesh smoke stack. Holds the docs[us] partition and every broadcast table; the driver routes SQL scans of docs to it when the query touches partitionKey='us'.";
+        } else if ("agent-eu".equals(id)) {
+            base = "Pretend EU-region agent from the mesh smoke stack. Holds the docs[eu] partition and every broadcast table; the driver routes docs scans with partitionKey='eu' here.";
+        } else {
+            base = "Mesh agent " + id + " — runs a JVS SQL engine over its declared partitions and broadcast tables; addressable via mesh.agent.task." + id;
+        }
+        if (capabilities.contains("pipeline-node")) {
+            base += " ALSO runs pipeline-node tasks (has hitorro-mesh-agent-pipelines).";
+        }
+        return base;
     }
 
     @GetMapping("/tables")

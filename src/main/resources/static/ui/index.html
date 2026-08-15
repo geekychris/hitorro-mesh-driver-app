@@ -459,30 +459,31 @@
     <article>
       <header>
         <span>Cluster topology</span>
-        <small class="meta">live · auto-refresh 2 s · driver + agents + tables + pipelines</small>
+        <small class="meta">live · auto-refresh 2 s · hover any element for details</small>
       </header>
-      <div id="mesh-viz-wrapper" style="overflow-x: auto;">
+      <div id="mesh-viz-wrapper" style="overflow-x: auto; position: relative;">
         <svg id="mesh-viz" width="100%" height="640" style="min-width: 900px;">
           <defs>
             <marker id="mesh-arrow" viewBox="0 0 10 10" refX="9" refY="5"
                     markerWidth="6" markerHeight="6" orient="auto">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--primary-mesh)"/>
             </marker>
-            <linearGradient id="mesh-flow" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%"  stop-color="var(--primary-mesh)" stop-opacity="0.9"/>
-              <stop offset="50%" stop-color="var(--accent-mesh)"  stop-opacity="0.7"/>
-              <stop offset="100%" stop-color="var(--primary-mesh)" stop-opacity="0.9"/>
-            </linearGradient>
           </defs>
         </svg>
+        <div id="mesh-info" class="mesh-info" hidden></div>
       </div>
       <div id="mesh-legend" class="meta" style="margin-top: 0.5rem; display:flex; gap: 1rem; flex-wrap: wrap;">
         <span><span class="mesh-swatch mesh-driver"></span> driver</span>
         <span><span class="mesh-swatch mesh-agent"></span> agent</span>
-        <span><span class="mesh-swatch mesh-partition"></span> partition</span>
-        <span><span class="mesh-swatch mesh-broadcast"></span> broadcast</span>
-        <span><span class="mesh-swatch mesh-pipeline"></span> pipeline node</span>
+        <span><span class="mesh-swatch mesh-partition"></span> partition (split — different data per agent)</span>
+        <span><span class="mesh-swatch mesh-broadcast"></span> broadcast (fan-out — same data on every agent)</span>
+        <span><span class="mesh-swatch mesh-pipeline"></span> running pipeline node</span>
       </div>
+    </article>
+
+    <article>
+      <header>Data flow patterns</header>
+      <div id="mesh-flows" class="meta">loading…</div>
     </article>
   </section>
 
@@ -503,8 +504,61 @@
         <header>
           <span>Job spec (YAML)</span>
           <span style="flex:1"></span>
+          <button id="pl-builder-toggle" type="button" class="secondary outline"
+                  style="margin:0 0.4rem 0 0; padding:0.15rem 0.7rem;">🧱 Builder</button>
           <button id="pl-run" type="button" style="margin:0;padding:0.15rem 0.9rem;">▶ Run</button>
         </header>
+
+        <!-- Form-based builder — hidden until toggled. Emits YAML into the
+             editor below every time a control changes. -->
+        <div id="pl-builder" class="pl-builder" hidden>
+          <div class="pl-builder-row">
+            <label>job id</label>
+            <input id="pb-job" type="text" value="my-job" style="flex:1"/>
+          </div>
+          <div class="pl-builder-row">
+            <label>source</label>
+            <select id="pb-source-kind">
+              <option value="inline">inline (rows in spec)</option>
+              <option value="ndjson-file">ndjson-file</option>
+              <option value="json-file">json-file</option>
+              <option value="csv-file">csv-file</option>
+              <option value="nats">nats (streaming)</option>
+              <option value="kafka">kafka (streaming)</option>
+              <option value="kvstore">kvstore</option>
+              <option value="lucene">lucene</option>
+            </select>
+            <input id="pb-source-arg" type="text" placeholder="url / subject / topic / name" style="flex:1"/>
+          </div>
+          <div id="pb-steps"></div>
+          <div class="pl-builder-row">
+            <button type="button" class="secondary outline" id="pb-add-filter"
+                    style="padding:0.15rem 0.5rem;">+ filter</button>
+            <button type="button" class="secondary outline" id="pb-add-project"
+                    style="padding:0.15rem 0.5rem;">+ project</button>
+            <button type="button" class="secondary outline" id="pb-add-setfield"
+                    style="padding:0.15rem 0.5rem;">+ set-field</button>
+            <button type="button" class="secondary outline" id="pb-add-groovy"
+                    style="padding:0.15rem 0.5rem;">+ groovy-map</button>
+          </div>
+          <div class="pl-builder-row">
+            <label>sinks</label>
+            <label><input type="checkbox" id="pb-sink-mem" checked/> memory-table</label>
+            <label><input type="checkbox" id="pb-sink-cnt" checked/> counting</label>
+            <label><input type="checkbox" id="pb-sink-ndjson"/> ndjson-file</label>
+            <label><input type="checkbox" id="pb-sink-kv"/> kvstore</label>
+            <label><input type="checkbox" id="pb-sink-lucene"/> lucene</label>
+          </div>
+          <div class="pl-builder-row">
+            <button type="button" id="pb-emit" style="padding:0.15rem 0.9rem;">↓ Build & load into editor</button>
+            <span id="pb-status" class="meta"></span>
+          </div>
+          <details style="margin-top:0.5rem;">
+            <summary class="meta">Preview YAML</summary>
+            <div id="pb-preview" class="pl-builder-yaml">(nothing built yet)</div>
+          </details>
+        </div>
+
         <textarea id="pl-yaml" rows="12" style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
 
         <div id="pl-status" hidden style="margin-top: 0.75rem;">
