@@ -740,9 +740,13 @@
       </div>
       <div class="grid">
         <article style="max-width: 22rem;">
-          <header>
+          <header style="display:flex; align-items:center; gap:0.4rem;">
             <span>Indexes</span>
             <small class="meta" id="search-index-count">—</small>
+            <span style="flex:1"></span>
+            <button id="search-refresh" type="button" class="secondary outline"
+                    title="Re-fetch the index list from the selected backend. Auto-refreshes every 5s while this tab is active."
+                    style="margin:0; padding:0.1rem 0.5rem; font-size:0.75rem;">↻</button>
           </header>
           <div id="search-index-list" title="Click any index to load it into the search box.">loading…</div>
         </article>

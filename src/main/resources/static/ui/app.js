@@ -1774,6 +1774,8 @@ let meshVizTimer = null;
 
 // ================================================================ SEARCH TAB
 
+let searchIndexTimer = null;
+
 async function refreshSearchTab() {
   wireSearchBackendToggle();
   wireStageBuilder();
@@ -1783,7 +1785,19 @@ async function refreshSearchTab() {
     runBtn._wired = true;
     runBtn.addEventListener('click', runSearch);
   }
+  const refreshBtn = $('#search-refresh');
+  if (refreshBtn && !refreshBtn._wired) {
+    refreshBtn._wired = true;
+    refreshBtn.addEventListener('click', loadSearchIndexes);
+  }
   updateQueryPreview();
+  // Auto-refresh the indexes list while the tab is active so freshly
+  // pipeline-written indexes show up without needing a tab-switch.
+  if (searchIndexTimer) clearInterval(searchIndexTimer);
+  searchIndexTimer = setInterval(() => {
+    if (!$('#search').classList.contains('active')) return;
+    loadSearchIndexes();
+  }, 5000);
 }
 
 function wireStageBuilder() {
