@@ -296,6 +296,9 @@
         <span>Inventory matrix <span id="inventory-badge" class="badge">?</span></span>
         <small class="meta">GET /mesh/queries/inventory · who holds what, live probe</small>
         <span style="float:right;">
+          <a href="#" id="inventory-rehash"
+             title="Re-hash partitioned tables whose target agent has dropped (calls /mesh/queries/registered/reconcile-partitions)"
+             style="text-decoration:none;margin-right:0.5rem;font-size:0.85rem;">🔄 re-hash</a>
           <a href="#" id="inventory-reconcile"
              title="Unregister all runtime entries agents hold (drops orphans from earlier driver sessions)"
              style="text-decoration:none;color:var(--danger);margin-right:0.5rem;font-size:0.85rem;">🧹 reconcile</a>

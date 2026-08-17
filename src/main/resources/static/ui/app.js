@@ -2476,6 +2476,32 @@ async function unregisterRuntimeTable(name) {
   }
 }
 
+/** Trigger the reactive re-hash — POST to /reconcile-partitions.
+ *  Shows outcome counts inline, refreshes inventory matrix on completion. */
+async function rehashPartitions() {
+  const badge = $('#inventory-badge');
+  const body = $('#inventory-body');
+  if (!body) return;
+  const priorHtml = body.innerHTML;
+  body.innerHTML = '<small class="meta">re-hashing partitions…</small>';
+  try {
+    const r = await api('/mesh/queries/registered/reconcile-partitions', {method: 'POST'});
+    await refreshInventoryMatrix();
+    // Overlay a summary line above the matrix.
+    const summary = `<div style="margin:0 0 0.4rem;padding:0.3rem 0.5rem;background:#f8f9fa;border-left:3px solid #2E86AB;font-size:0.85rem;">`
+      + `re-hashed <b>${r.rehashed.length}</b> · `
+      + `still-live <b>${r.stillLive.length}</b> · `
+      + `skipped-explicit <b>${r.skippedExplicit.length}</b> · `
+      + `within-grace <b>${r.withinGrace?.length ?? 0}</b> · `
+      + `refused <b>${r.refused.length}</b>`
+      + `</div>`;
+    body.innerHTML = summary + body.innerHTML;
+  } catch (e) {
+    body.innerHTML = priorHtml
+      + `<div style="color:var(--danger);margin-top:0.4rem;">re-hash failed: ${esc(e.message || e)}</div>`;
+  }
+}
+
 async function reconcileRuntimeTables() {
   const dlg = $('#reconcile-dialog');
   const body = $('#reconcile-body');
@@ -3234,6 +3260,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#inventory-reconcile')?.addEventListener('click', ev => {
     ev.preventDefault();
     reconcileRuntimeTables();
+  });
+  $('#inventory-rehash')?.addEventListener('click', ev => {
+    ev.preventDefault();
+    rehashPartitions();
   });
   // Polling on/off with tab visibility.
   document.addEventListener('visibilitychange', updateInventoryPolling);

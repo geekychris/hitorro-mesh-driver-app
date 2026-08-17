@@ -37,6 +37,7 @@ import java.util.Set;
 @SpringBootApplication
 @EnableConfigurationProperties({ DriverProperties.class, ClusterManagerProperties.class })
 @org.springframework.context.annotation.Import(ClusterManagerAutoConfig.class)
+@org.springframework.scheduling.annotation.EnableScheduling
 public class MeshDriverApplication implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(MeshDriverApplication.class);
