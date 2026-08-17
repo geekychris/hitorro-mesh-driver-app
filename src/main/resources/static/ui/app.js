@@ -993,13 +993,25 @@ function renderStorage(s) {
       + ` · bucket <code>${esc(s3.bucket)}</code>`
       + ` · ssl=${s3.ssl}`
       + ` · reachable=${s3.reachable}</div>`);
-  } else {
-    parts.push('<div class="meta">MinIO / S3 not configured. Set '
-      + '<code>HITORRO_STORAGE_S3_ENDPOINT</code> et al. and restart the driver '
-      + 'to enable S3-backed reads/writes. See <a href="../scripts/minio/minio-up.sh" '
-      + 'title="hitorro-mesh-examples/scripts/minio/">minio-up.sh</a>.</div>');
   }
+  // Lifecycle controls — GET/POST /mesh/storage/minio. Present whether or
+  // not S3 is currently configured; the button hot-wires the driver via
+  // BaseFileSystem + Spring singleton so no restart is needed.
+  parts.push(`<div id="minio-lifecycle" style="margin-top:0.4rem;">
+    <span class="meta">MinIO lifecycle</span>
+    <span id="minio-status-badge" class="badge">…</span>
+    <button id="minio-start-btn" class="secondary" style="margin-left:0.5rem;">▶ Start MinIO</button>
+    <button id="minio-stop-btn"  class="secondary">■ Stop</button>
+    <div id="minio-status-detail" class="meta"
+         style="font-family:ui-monospace,monospace;font-size:0.75rem;margin-top:0.3rem;"></div>
+    <div id="minio-status-msg" class="meta" style="margin-top:0.3rem;"></div>
+  </div>`);
   summaryEl.innerHTML = parts.join('');
+
+  // Wire lifecycle controls after the innerHTML swap.
+  $('#minio-start-btn').addEventListener('click', () => minioAction('start'));
+  $('#minio-stop-btn').addEventListener('click', () => minioAction('stop'));
+  refreshMinioStatus();
 
   // Per-dataset local/s3 matrix. Only shown when S3 is configured — no
   // point comparing when there's only one backend.
@@ -1126,6 +1138,62 @@ async function browseStorage(path) {
 /** Join a base URI with a child name — handles s3:// and file:/ uniformly. */
 function joinPath(base, name) {
   return base.endsWith('/') ? base + name + '/' : base + '/' + name + '/';
+}
+
+/** Refresh the MinIO status pill + detail line without touching the rest of
+ *  the storage summary. Safe to call whether or not the pill is currently
+ *  in the DOM (renderStorage may not have run yet). */
+async function refreshMinioStatus() {
+  const badge  = $('#minio-status-badge');
+  const detail = $('#minio-status-detail');
+  const startB = $('#minio-start-btn');
+  const stopB  = $('#minio-stop-btn');
+  if (!badge) return;
+  try {
+    const s = await api('/mesh/storage/minio');
+    const up = !!s.reachable;
+    badge.textContent = up ? 'running' : (s.dockerAvailable ? 'stopped' : 'docker missing');
+    badge.className = 'badge ' + (up ? 'success' : (s.dockerAvailable ? 'warning' : 'danger'));
+    startB.disabled = up || !s.dockerAvailable;
+    stopB.disabled  = !up || !s.dockerAvailable;
+    detail.innerHTML = up
+      ? `endpoint <code>${esc(s.endpoint)}</code> · bucket <code>${esc(s.bucket)}</code>`
+        + ` · console <a href="${esc(s.consoleUrl)}" target="_blank">${esc(s.consoleUrl)}</a>`
+        + ` · user <code>${esc(s.username)}</code> · adapter=${s.adapterRegistered ? 'wired' : 'not wired'}`
+      : `endpoint <code>${esc(s.endpoint)}</code> · bucket <code>${esc(s.bucket)}</code>`
+        + (s.scriptsDir
+            ? ` · scripts <code>${esc(s.scriptsDir)}</code>`
+            : ' · <span style="color:var(--danger)">scripts dir not found</span>')
+        + (s.dockerAvailable ? '' : ' · <span style="color:var(--danger)">docker not on PATH</span>');
+  } catch (e) {
+    badge.textContent = 'unknown';
+    badge.className = 'badge';
+    detail.textContent = e.message || String(e);
+  }
+}
+
+/** Kick /mesh/storage/minio/{start|stop}, then reload storage summary +
+ *  browser so the whole card reflects the new backend state. */
+async function minioAction(action) {
+  const msg = $('#minio-status-msg');
+  const startB = $('#minio-start-btn');
+  const stopB  = $('#minio-stop-btn');
+  if (startB) startB.disabled = true;
+  if (stopB)  stopB.disabled  = true;
+  if (msg) msg.innerHTML = `<span class="meta">${action}ing MinIO…</span>`;
+  try {
+    const r = await api('/mesh/storage/minio/' + action, {method: 'POST'});
+    if (r.success === false) throw new Error(r.error || 'failed');
+    if (msg) msg.innerHTML = `<span style="color:var(--success)">${action} ok</span>`
+      + (r.alreadyRunning ? ' <span class="meta">(was already up)</span>' : '');
+    // Reload full storage panel so the S3 line + browser refresh.
+    const storage = await api('/mesh/storage');
+    renderStorage(storage);
+    browseStorage('');
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message || e)}</span>`;
+    refreshMinioStatus();
+  }
 }
 
 /** kB / MB / GB with one decimal. */
