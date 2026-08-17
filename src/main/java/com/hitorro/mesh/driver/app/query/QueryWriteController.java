@@ -5,6 +5,9 @@ package com.hitorro.mesh.driver.app.query;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hitorro.jsontypesystem.Type;
+import com.hitorro.mesh.RegisterTableMessage;
+import com.hitorro.mesh.driver.DistributedTable;
 import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.mesh.driver.QueryDispatcher;
 import com.hitorro.util.basefile.fs.BaseFile;
@@ -122,6 +125,12 @@ public class QueryWriteController {
         public String format;   // "ndjson" | "parquet"
         public String path;     // file:/… | s3://bucket/key | hdfs://…
         public long timeoutMs = 60_000;
+        /** When true, register the written file as a broadcast table on
+         *  every live agent + on the driver's DistributedTableRegistry so
+         *  the very next {@code SELECT * FROM &lt;tableName&gt;} works. */
+        public boolean register = false;
+        /** Explicit table name; defaults to the bare path (extension stripped). */
+        public String tableName;
     }
 
     @PostMapping("/write")
@@ -137,24 +146,31 @@ public class QueryWriteController {
 
             Sink<JsonNode> sink = openSink(format, resolved);
             log.info("query write → {} ({} sink for {})", resolved, format, sink.getClass().getSimpleName());
-            long rows;
+            List<JsonNode> collected;
             String queryId;
             try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
                     req.sql, Duration.ofMillis(req.timeoutMs))) {
                 queryId = h.queryId();
                 sink.start();
-                List<JsonNode> collected = h.collect(req.timeoutMs, TimeUnit.MILLISECONDS);
+                collected = h.collect(req.timeoutMs, TimeUnit.MILLISECONDS);
                 for (JsonNode row : collected) sink.add(row);
-                rows = collected.size();
             } finally {
                 try { sink.close(); } catch (Exception e) { log.warn("sink close failed", e); }
             }
+            long rows = collected.size();
 
             out.put("queryId", queryId);
             out.put("format", format);
             out.put("path", req.path);
             out.put("resolved", resolved);
             out.put("rowsWritten", rows);
+
+            if (req.register && rows > 0) {
+                out.put("registered", registerAsTable(req, resolved, format, collected.get(0)));
+            } else if (req.register) {
+                out.put("registered", Map.of("skipped", "no rows written; nothing to register"));
+            }
+
             out.put("elapsedMs", (System.nanoTime() - tStart) / 1_000_000);
             out.put("success", true);
             return ResponseEntity.ok(out);
@@ -233,6 +249,109 @@ public class QueryWriteController {
     private static String firstNonBlank(String... vs) {
         for (String v : vs) if (v != null && !v.isBlank()) return v;
         return null;
+    }
+
+    /**
+     * Register the just-written file as a broadcast table on every live
+     * agent (via RegisterTableMessage over NATS) + on the driver's
+     * DistributedTableRegistry (so {@code /mesh/tables} lists it +
+     * planner-side JOIN validation allows it). Type is induced from
+     * {@code firstRow} — every column becomes a nullable
+     * {@code core_string} / {@code core_long} / {@code core_double}
+     * / {@code core_boolean} based on the observed JsonNode type.
+     * Nested objects/arrays fall back to {@code core_string} (their
+     * serialised form). Good enough for ad-hoc query-result tables —
+     * a caller who wants stricter typing can build the type themselves
+     * and call {@code POST /mesh/broadcast-tables} directly.
+     */
+    private Map<String, Object> registerAsTable(WriteRequest req, String resolvedUri,
+                                                String format, JsonNode firstRow) {
+        String name = req.tableName != null && !req.tableName.isBlank()
+                ? req.tableName.trim()
+                : deriveTableName(req.path, format);
+        String typeJson = induceTypeJson(name, firstRow);
+
+        // Driver-side registration — TWO forms (mirrors what MeshRegistrar
+        // does for datasets):
+        //   1) registerBroadcast(name) so planner-side JOIN validation
+        //      knows the name is a permitted broadcast dimension.
+        //   2) register(SimpleRuntimeTable) with a single "broadcast"
+        //      partition + only [jvssql] capability, so `SELECT * FROM x`
+        //      routes to any jvssql agent (which now has the runtime
+        //      table installed).
+        driver.tables().registerBroadcast(name);
+        try {
+            Type type = new Type();
+            type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(typeJson));
+            DistributedTable.Partition part = new DistributedTable.Partition(
+                    "broadcast", java.util.Set.of("jvssql"), -1L);
+            driver.tables().register(new RegisteredWriteTable(
+                    name, type, java.util.List.of(part)));
+        } catch (Exception e) {
+            log.warn("driver-side distributed registration failed for {}: {}", name, e.toString());
+        }
+
+        // Fan out to every live agent — they'll load the file via
+        // NdjsonLocalTable / ParquetLocalTable and register in their
+        // RuntimeTableRegistry.
+        RegisterTableMessage msg = new RegisterTableMessage(
+                name, typeJson, resolvedUri, format, /*broadcast=*/true, null);
+        driver.publishRegisterTable(msg);
+
+        int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+        Map<String, Object> reg = new LinkedHashMap<>();
+        reg.put("tableName", name);
+        reg.put("typeJson", typeJson);
+        reg.put("uri", resolvedUri);
+        reg.put("format", format);
+        reg.put("broadcast", true);
+        reg.put("agentsNotified", agentCount);
+        return reg;
+    }
+
+    /** {@code my-langs.parquet} → {@code my-langs}; passthrough URIs
+     *  become the file stem too. Result is lower-cased since jvssql
+     *  identifiers are case-sensitive but SQL parses UPPER as-is. */
+    private static String deriveTableName(String path, String format) {
+        String p = path;
+        int slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+        if (slash >= 0) p = p.substring(slash + 1);
+        for (String ext : new String[]{".ndjson.gz", ".ndjson.bz2", ".ndjson",
+                                       ".parquet", ".json"}) {
+            if (p.endsWith(ext)) { p = p.substring(0, p.length() - ext.length()); break; }
+        }
+        // jvssql-friendly: strip characters that would need quoting.
+        return p.replaceAll("[^A-Za-z0-9_]", "_");
+    }
+
+    /** Minimal DistributedTable so a runtime-registered write output can be
+     *  scanned via {@code SELECT * FROM &lt;name&gt;} — single "broadcast"
+     *  partition with only jvssql capability so any live agent that has
+     *  the file installed in its RuntimeTableRegistry can serve it. */
+    private record RegisteredWriteTable(
+            String name, Type type,
+            java.util.List<DistributedTable.Partition> partitions
+    ) implements DistributedTable {}
+
+    private static String induceTypeJson(String name, JsonNode firstRow) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"name\":\"").append(name).append("\",\"fields\":[");
+        boolean first = true;
+        java.util.Iterator<String> it = firstRow.fieldNames();
+        while (it.hasNext()) {
+            String fn = it.next();
+            JsonNode v = firstRow.get(fn);
+            String jvsType = switch (v.getNodeType()) {
+                case NUMBER  -> v.isIntegralNumber() ? "core_long" : "core_double";
+                case BOOLEAN -> "core_boolean";
+                default      -> "core_string";
+            };
+            if (!first) sb.append(',');
+            sb.append("{\"name\":\"").append(fn).append("\",\"type\":\"").append(jvsType).append("\"}");
+            first = false;
+        }
+        sb.append("]}");
+        return sb.toString();
     }
 
     private static boolean hasScheme(String path) {

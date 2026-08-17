@@ -1657,6 +1657,8 @@ async function writePlaygroundQuery() {
   const sql       = getSql().trim();
   const format    = $('#pg-write-format').value;
   const path      = ($('#pg-write-path').value || '').trim();
+  const register  = $('#pg-write-register')?.checked || false;
+  const tableName = ($('#pg-write-tablename')?.value || '').trim();
   const timeoutMs = Math.max(+$('#pg-timeout').value || 5000, 30000); // writes get ≥ 30s
   const statusEl  = $('#pg-write-status');
   if (!sql)  { statusEl.textContent = 'no SQL — nothing to write'; return; }
@@ -1666,18 +1668,28 @@ async function writePlaygroundQuery() {
   statusEl.textContent = `writing ${format} → ${path} …`;
   const t0 = performance.now();
   try {
+    const body = { sql, format, path, timeoutMs, register };
+    if (tableName) body.tableName = tableName;
     const r = await api('/mesh/queries/write', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sql, format, path, timeoutMs }),
+      body: JSON.stringify(body),
     });
     const dtMs = Math.round(performance.now() - t0);
     if (r.success) {
       statusEl.style.color = 'var(--success)';
       // Show where it actually landed — critical when the user typed a
       // bare name and the resolver picked the destination.
-      statusEl.innerHTML = `✅ wrote <b>${r.rowsWritten.toLocaleString()}</b> rows `
+      let msg = `✅ wrote <b>${r.rowsWritten.toLocaleString()}</b> rows `
         + `→ <code>${esc(r.resolved || r.path)}</code> in ${dtMs}ms`;
+      if (r.registered && r.registered.tableName) {
+        msg += ` · registered as <code>${esc(r.registered.tableName)}</code>`
+             + ` on ${r.registered.agentsNotified} agent(s)`
+             + ` — try <code>SELECT * FROM ${esc(r.registered.tableName)}</code>`;
+      } else if (r.registered && r.registered.skipped) {
+        msg += ` · registration skipped: ${esc(r.registered.skipped)}`;
+      }
+      statusEl.innerHTML = msg;
     } else {
       statusEl.style.color = 'var(--danger)';
       statusEl.textContent = 'write failed: ' + (r.error || 'unknown error');

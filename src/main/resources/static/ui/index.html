@@ -472,6 +472,23 @@
                      title="Bare name → default location. Explicit URIs (file:/… / s3://…) used as-is.">
               <button id="pg-write-btn" class="secondary" style="margin: 0;">↓ Write</button>
             </div>
+            <!-- Register-as-broadcast-table hook — fans out a
+                 RegisterTableMessage over NATS so every live agent
+                 installs the just-written file in its RuntimeTableRegistry.
+                 Table name defaults to the bare stem of the path (e.g.
+                 "my-langs.parquet" → "my_langs"). The driver also
+                 registers it in its DistributedTableRegistry so
+                 /mesh/tables lists it + JOIN validation permits it. -->
+            <div class="row" style="align-items: center; gap: 0.5rem; margin: 0.4rem 0 0;">
+              <label style="margin: 0; display: flex; align-items: center; gap: 0.35rem;">
+                <input type="checkbox" id="pg-write-register" style="margin: 0;">
+                Register as broadcast table
+              </label>
+              <input type="text" id="pg-write-tablename"
+                     placeholder="(defaults to file stem)"
+                     style="flex: 1; margin: 0;"
+                     title="Table name for SELECT * FROM &lt;name&gt;. Leave blank to derive from the path.">
+            </div>
             <p class="meta" style="margin: 0.4rem 0 0; font-size: 0.8rem;">
               Where a bare name writes to:
               <span id="pg-write-resolved-hint">…</span>
