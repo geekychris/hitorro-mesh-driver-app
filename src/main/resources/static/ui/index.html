@@ -495,6 +495,15 @@
             </p>
             <p id="pg-write-status" class="meta" style="margin: 0.3rem 0 0;"></p>
           </fieldset>
+          <!-- Runtime-table listing — refreshed after every write-with-register
+               and populated on tab load. Each row has an unregister button
+               that DELETEs /mesh/tables/{name} which drops the driver-side
+               entry + fans out UnregisterTableMessage to agents. -->
+          <fieldset id="pg-runtime-tables-fs" style="margin: 0.5rem 0 0; padding: 0.6rem 0.75rem; border: 1px solid #d5d5d5; border-radius: 4px;" hidden>
+            <legend style="padding: 0 0.4rem;"><b>Runtime-registered tables</b>
+              <span class="meta">— this driver session</span></legend>
+            <div id="pg-runtime-tables"></div>
+          </fieldset>
           <!-- Populated when a semantic:true request returned a rewrittenSql
                distinct from the input. Purely informational; the query
                already ran against this rewritten form. -->

@@ -6,6 +6,7 @@ package com.hitorro.mesh.driver.app;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hitorro.mesh.AgentDescriptor;
 import com.hitorro.mesh.UnregisterTableMessage;
+import com.hitorro.mesh.driver.app.query.RuntimeTableTracker;
 import com.hitorro.mesh.driver.DistributedTable;
 import com.hitorro.mesh.driver.DistributedTableRegistry;
 import com.hitorro.mesh.driver.MeshDriver;
@@ -96,16 +97,19 @@ public class MeshRestController {
      * the UI's Datasets tab uses.
      */
     private final DatasetRegistry datasetRegistry;
+    private final RuntimeTableTracker runtimeTracker;
 
     @Autowired
     public MeshRestController(MeshDriver driver, ClusterManager clusterManager, MeshMetrics metrics,
                               @Autowired(required = false) PlaceJoinRewriter placeJoinRewriter,
-                              @Autowired(required = false) DatasetRegistry datasetRegistry) {
+                              @Autowired(required = false) DatasetRegistry datasetRegistry,
+                              RuntimeTableTracker runtimeTracker) {
         this.driver = driver;
         this.clusterManager = clusterManager;
         this.metrics = metrics;
         this.placeJoinRewriter = placeJoinRewriter;
         this.datasetRegistry = datasetRegistry;
+        this.runtimeTracker = runtimeTracker;
     }
 
     @PostMapping("/queries")
@@ -645,6 +649,8 @@ public class MeshRestController {
         // Fan out to every live agent so they drop the runtime install
         // from RuntimeTableRegistry + tombstone the journal.
         driver.publishUnregisterTable(new UnregisterTableMessage(name, partitionKey));
+        // Drop driver-side listing entry so the UI panel updates.
+        runtimeTracker.forget(name);
         if (!removed) throw new IllegalArgumentException("no distributed table registered as: " + name);
         log.info("runtime-unregistered distributed table: {} (partitionKey={})", name, partitionKey);
         return Map.of("removed", name, "partitionKey", partitionKey == null ? "" : partitionKey,
@@ -671,6 +677,7 @@ public class MeshRestController {
         boolean removed = driver.tables().unregisterBroadcast(name);
         // Fan-out so agents drop their runtime install (broadcast pk convention).
         driver.publishUnregisterTable(new UnregisterTableMessage(name, null));
+        runtimeTracker.forget(name);
         if (!removed) throw new IllegalArgumentException("no broadcast table registered as: " + name);
         log.info("runtime-unregistered broadcast table: {}", name);
         return Map.of("removed", name, "fannedOut", true);

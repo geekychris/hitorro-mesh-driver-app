@@ -1222,18 +1222,33 @@ async function previewStorageFile(fileUri) {
   try {
     const r = await api('/mesh/storage/head?path=' + encodeURIComponent(fileUri) + '&lines=25');
     if (r.error) throw new Error(r.error);
-    const langHint = r.kind === 'parquet' ? '' : ' language-json';
+
+    // CSV/TSV get rendered as a small HTML table instead of raw text.
+    // Delimiter picked from extension; naive split (no quote handling)
+    // is fine for previews — the raw preview remains available via
+    // the "raw" toggle.
+    const lower = fileUri.toLowerCase();
+    const isCsv = lower.endsWith('.csv') || lower.endsWith('.csv.gz') || lower.endsWith('.csv.bz2');
+    const isTsv = lower.endsWith('.tsv') || lower.endsWith('.tsv.gz') || lower.endsWith('.tsv.bz2');
+    let body;
+    if ((isCsv || isTsv) && r.preview) {
+      const delim = isCsv ? ',' : '\t';
+      body = renderCsvTable(r.preview, delim);
+    } else {
+      const langHint = r.kind === 'parquet' ? '' : ' language-json';
+      body = `<pre class="scroll${langHint}" style="margin:0.4rem 0 0;max-height:24rem;overflow:auto;font-size:0.78rem;">${esc(r.preview || '')}</pre>`;
+    }
     target.innerHTML = `
       <div style="border:1px solid #d5d5d5;border-radius:4px;padding:0.5rem;background:#fafafa;">
         <div style="display:flex;justify-content:space-between;align-items:baseline;">
           <b>📄 ${esc(fileUri)}</b>
           <span class="meta" style="font-size:0.75rem;">
-            ${r.kind} · ${humanBytes(r.size || 0)}
+            ${(isCsv || isTsv) ? (isCsv ? 'csv' : 'tsv') : r.kind} · ${humanBytes(r.size || 0)}
             ${r.truncated ? ' · truncated' : ''}
             <a href="#" id="storage-preview-close" style="margin-left:0.5rem;">✕ close</a>
           </span>
         </div>
-        <pre class="scroll${langHint}" style="margin:0.4rem 0 0;max-height:24rem;overflow:auto;font-size:0.78rem;">${esc(r.preview || '')}</pre>
+        ${body}
       </div>`;
     $('#storage-preview-close')?.addEventListener('click', ev => {
       ev.preventDefault();
@@ -1243,6 +1258,26 @@ async function previewStorageFile(fileUri) {
   } catch (e) {
     target.innerHTML = `<small style="color:var(--danger)">preview failed: ${esc(e.message || e)}</small>`;
   }
+}
+
+/** Naive CSV/TSV → HTML table. Splits on the delimiter without quote
+ *  awareness — good enough for previews. First row rendered as thead. */
+function renderCsvTable(text, delim) {
+  const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+  if (!lines.length) return '<small class="meta">(empty)</small>';
+  const rows = lines.map(l => l.split(delim));
+  const [head, ...body] = rows;
+  return `
+    <div class="scroll" style="max-height:24rem;overflow:auto;margin:0.4rem 0 0;">
+      <table style="width:100%;font-size:0.78rem;border-collapse:collapse;">
+        <thead>
+          <tr>${head.map(h => `<th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #d5d5d5;background:#eef;">${esc(h)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${body.map(r => `<tr>${r.map(c => `<td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${esc(c)}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 /** Refresh the MinIO status pill + detail line without touching the rest of
@@ -1777,6 +1812,76 @@ async function updateWriteResolvedHint() {
  * Parquet — hits POST /mesh/queries/write. Bare names ("big-cities")
  * resolve to a default location; explicit URIs pass through.
  */
+/** Pull the runtime-registered tables list and render an inline table
+ *  under the Playground write panel. Each row has an unregister button
+ *  that DELETEs the table (driver-side entry + agent fan-out). */
+async function refreshRuntimeTablesPanel() {
+  const fs = $('#pg-runtime-tables-fs');
+  const target = $('#pg-runtime-tables');
+  if (!fs || !target) return;
+  try {
+    const rows = await api('/mesh/queries/registered');
+    if (!rows || !rows.length) {
+      fs.hidden = true;
+      target.innerHTML = '';
+      return;
+    }
+    fs.hidden = false;
+    target.innerHTML = `
+      <table style="width:100%;font-size:0.85rem;">
+        <thead><tr>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">table</th>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">format</th>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">uri</th>
+          <th style="text-align:center;padding:0.15rem 0.4rem;">agents</th>
+          <th style="text-align:right;padding:0.15rem 0.4rem;"></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td style="padding:0.15rem 0.4rem;"><code>${esc(r.name)}</code></td>
+              <td style="padding:0.15rem 0.4rem;">${esc(r.format)}</td>
+              <td style="padding:0.15rem 0.4rem;font-family:ui-monospace,monospace;font-size:0.78rem;color:#555;">${esc(r.uri)}</td>
+              <td style="padding:0.15rem 0.4rem;text-align:center;">${r.agentsNotified}</td>
+              <td style="padding:0.15rem 0.4rem;text-align:right;white-space:nowrap;">
+                <a href="#" class="runtime-select" data-name="${esc(r.name)}"
+                   title="Paste SELECT * FROM ${esc(r.name)} into the editor"
+                   style="text-decoration:none;margin-right:0.5rem;">▶</a>
+                <a href="#" class="runtime-unregister" data-name="${esc(r.name)}"
+                   title="Unregister ${esc(r.name)} (driver + all agents)"
+                   style="text-decoration:none;color:var(--danger);">🗑</a>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+    target.querySelectorAll('.runtime-unregister').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        unregisterRuntimeTable(a.dataset.name);
+      }));
+    target.querySelectorAll('.runtime-select').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        setSql('SELECT * FROM ' + a.dataset.name + ' LIMIT 100');
+      }));
+  } catch (e) {
+    target.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
+  }
+}
+
+async function unregisterRuntimeTable(name) {
+  if (!confirm(`Unregister "${name}" from the mesh? This drops the driver-side entry AND removes it from every agent's runtime registry.`)) return;
+  try {
+    const r = await api('/mesh/tables/' + encodeURIComponent(name) + '?partitionKey=broadcast',
+                        { method: 'DELETE' });
+    if (r.error) throw new Error(r.error);
+    refreshRuntimeTablesPanel();
+  } catch (e) {
+    alert('unregister failed: ' + (e.message || e));
+  }
+}
+
 async function writePlaygroundQuery() {
   const sql       = getSql().trim();
   const format    = $('#pg-write-format').value;
@@ -1810,6 +1915,7 @@ async function writePlaygroundQuery() {
         msg += ` · registered as <code>${esc(r.registered.tableName)}</code>`
              + ` on ${r.registered.agentsNotified} agent(s)`
              + ` — try <code>SELECT * FROM ${esc(r.registered.tableName)}</code>`;
+        refreshRuntimeTablesPanel();
       } else if (r.registered && r.registered.skipped) {
         msg += ` · registration skipped: ${esc(r.registered.skipped)}`;
       }
@@ -2350,6 +2456,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pg-write-path')?.addEventListener('input',  updateWriteResolvedHint);
   $('#pg-write-format')?.addEventListener('change', updateWriteResolvedHint);
   updateWriteResolvedHint();
+  refreshRuntimeTablesPanel();
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
     $('#pg-result').hidden = true;

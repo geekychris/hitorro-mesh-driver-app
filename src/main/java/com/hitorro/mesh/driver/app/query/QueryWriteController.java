@@ -69,13 +69,23 @@ public class QueryWriteController {
     private final MeshDriver driver;
     private final ObjectProvider<MinioProtocolAdapter> s3;
     private final Environment env;
+    private final RuntimeTableTracker runtimeTracker;
 
     public QueryWriteController(MeshDriver driver,
                                 ObjectProvider<MinioProtocolAdapter> s3,
-                                Environment env) {
+                                Environment env,
+                                RuntimeTableTracker runtimeTracker) {
         this.driver = driver;
         this.s3 = s3;
         this.env = env;
+        this.runtimeTracker = runtimeTracker;
+    }
+
+    /** {@code GET /mesh/queries/registered} — snapshot of runtime table
+     *  registrations made this driver session. UI panel reads this. */
+    @GetMapping("/registered")
+    public List<RuntimeTableTracker.Entry> registered() {
+        return runtimeTracker.snapshot();
     }
 
     /**
@@ -299,6 +309,7 @@ public class QueryWriteController {
         driver.publishRegisterTable(msg);
 
         int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+        runtimeTracker.record(msg, agentCount);
         Map<String, Object> reg = new LinkedHashMap<>();
         reg.put("tableName", name);
         reg.put("typeJson", typeJson);
