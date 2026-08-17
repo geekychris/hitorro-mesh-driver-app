@@ -620,6 +620,82 @@ public class QueryWriteController {
         }
     }
 
+    /** Request body for {@link #writeBatch}. */
+    public static final class BatchWriteRequest {
+        public List<WriteRequest> queries;
+        public String format;            // per-batch default (each query may still override)
+        public long timeoutMs = 60_000;  // per-query default
+        public boolean register = false; // per-batch default
+    }
+
+    /**
+     * Run N SQL statements sequentially, writing each to its own file.
+     * Same rules as {@link #write} per query: type induction, register
+     * flag, URI check. Per-query result captured — a failure on query
+     * K doesn't abort queries K+1..N (they run independently). Sequential
+     * (not parallel) so multiple concurrent SQL queries don't spike the
+     * dispatcher.
+     *
+     * <p>Per-query overrides beat batch defaults for format/timeout/
+     * register/typeJsonOverride/tableName. Path is derived from tableName
+     * if absent.</p>
+     */
+    @PostMapping("/write/batch")
+    public ResponseEntity<Map<String, Object>> writeBatch(@RequestBody BatchWriteRequest req) {
+        long tStart = System.nanoTime();
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (req.queries == null || req.queries.isEmpty()) {
+            out.put("success", false);
+            out.put("error", "queries list is required and non-empty");
+            return ResponseEntity.badRequest().body(out);
+        }
+
+        List<Map<String, Object>> results = new java.util.ArrayList<>();
+        long totalRows = 0;
+        int successes = 0;
+
+        for (int i = 0; i < req.queries.size(); i++) {
+            WriteRequest q = req.queries.get(i);
+            // Inherit batch defaults where the per-query field is unset.
+            if (q.format == null || q.format.isBlank()) q.format = req.format;
+            if (q.timeoutMs <= 0) q.timeoutMs = req.timeoutMs;
+            if (!q.register) q.register = req.register;
+            // Derive a path if the caller didn't set one — tableName or index.
+            if (q.path == null || q.path.isBlank()) {
+                String stem = (q.tableName != null && !q.tableName.isBlank())
+                        ? q.tableName
+                        : "batch-" + i;
+                q.path = stem;   // let resolveWritePath turn bare names into full URIs
+            }
+
+            Map<String, Object> perRes = new LinkedHashMap<>();
+            perRes.put("index", i);
+            try {
+                ResponseEntity<Map<String, Object>> r = write(q);
+                Map<String, Object> body = r.getBody();
+                if (body != null) perRes.putAll(body);
+                if (Boolean.TRUE.equals(body != null ? body.get("success") : null)) {
+                    successes++;
+                    Object rw = body.get("rowsWritten");
+                    if (rw instanceof Number n) totalRows += n.longValue();
+                }
+            } catch (Exception e) {
+                perRes.put("success", false);
+                perRes.put("error", e.getMessage());
+            }
+            results.add(perRes);
+        }
+
+        out.put("results", results);
+        out.put("totalQueries", req.queries.size());
+        out.put("successes", successes);
+        out.put("failures", req.queries.size() - successes);
+        out.put("totalRowsWritten", totalRows);
+        out.put("elapsedMs", (System.nanoTime() - tStart) / 1_000_000);
+        out.put("success", successes == req.queries.size());
+        return ResponseEntity.ok(out);
+    }
+
     /**
      * Wire the format to a concrete Sink. Parquet is loaded reflectively so
      * the driver-app builds and boots without pulling parquet + hadoop

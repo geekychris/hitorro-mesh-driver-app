@@ -1994,11 +1994,29 @@ async function refreshRuntimeTablesPanel() {
   const target = $('#pg-runtime-tables');
   if (!fs || !target) return;
   try {
-    const rows = await api('/mesh/queries/registered');
+    // Parallel — tracker list is cheap; inventory probe takes ~1.5s but
+    // enriches every row with a "N/M installed" badge derived from the
+    // live probe. Both loads share the same first paint.
+    const [rows, invRaw] = await Promise.all([
+      api('/mesh/queries/registered'),
+      api('/mesh/queries/inventory').catch(() => null),
+    ]);
     if (!rows || !rows.length) {
       fs.hidden = true;
       target.innerHTML = '';
       return;
+    }
+    // Precompute per-table install counts from the inventory probe.
+    const installedByName = new Map();
+    const agentsAsked = invRaw?.agentsAsked || 0;
+    for (const rep of (invRaw?.replies || [])) {
+      const seen = new Set();
+      for (const t of (rep.tables || [])) {
+        if (t.source === 'runtime') seen.add(t.name);
+      }
+      for (const name of seen) {
+        installedByName.set(name, (installedByName.get(name) || 0) + 1);
+      }
     }
     fs.hidden = false;
     target.innerHTML = `
@@ -2027,7 +2045,16 @@ async function refreshRuntimeTablesPanel() {
               </td>
               <td style="padding:0.15rem 0.4rem;">${esc(r.format)}</td>
               <td style="padding:0.15rem 0.4rem;font-family:ui-monospace,monospace;font-size:0.78rem;color:#555;">${esc(r.uri)}</td>
-              <td style="padding:0.15rem 0.4rem;text-align:center;">${r.agentsNotified}</td>
+              <td style="padding:0.15rem 0.4rem;text-align:center;">
+                ${invRaw ? (() => {
+                  const installed = installedByName.get(r.name) || 0;
+                  const cls = installed === agentsAsked ? 'success' : (installed === 0 ? 'danger' : 'warning');
+                  return `<span class="badge ${cls}"
+                             title="${installed} of ${agentsAsked} agents currently hold this table (live probe)">
+                            ${installed}/${agentsAsked}
+                          </span>`;
+                })() : r.agentsNotified}
+              </td>
               <td style="padding:0.15rem 0.4rem;text-align:right;white-space:nowrap;">
                 <a href="#" class="runtime-select" data-name="${esc(r.name)}"
                    title="Paste SELECT * FROM ${esc(r.name)} into the editor"
@@ -2166,6 +2193,13 @@ async function openRuntimeTableDetail(name) {
     <section style="margin-top:0.6rem;">
       <h4 style="margin:0 0 0.3rem;">Schema <span class="meta">— induced from first row</span></h4>
       ${schemaHtml}
+      <div style="margin-top:0.3rem;">
+        <button id="runtime-copy-json" class="secondary outline"
+                style="padding:0.1rem 0.5rem;font-size:0.8rem;">📋 Copy JSON</button>
+        <button id="runtime-copy-yaml" class="secondary outline"
+                style="padding:0.1rem 0.5rem;font-size:0.8rem;">📋 Copy YAML</button>
+        <span id="runtime-copy-msg" class="meta" style="margin-left:0.5rem;font-size:0.75rem;"></span>
+      </div>
       <details style="margin-top:0.4rem;">
         <summary style="cursor:pointer;font-size:0.85rem;">
           <b>Refine schema</b> <span class="meta">— override types (e.g. force <code>core_long</code>)</span>
@@ -2187,6 +2221,10 @@ async function openRuntimeTableDetail(name) {
         <span class="meta">— ${holdersInfo.agentsReplied}/${holdersInfo.agentsAsked} agents responded</span></h4>
       <ul style="margin:0;padding-left:1.2rem;">${holdersHtml}</ul>
     </section>`;
+
+  // Copy-as-JSON / YAML buttons for the induced type.
+  $('#runtime-copy-json')?.addEventListener('click', () => copyTypeSchema(entry?.typeJson, 'json'));
+  $('#runtime-copy-yaml')?.addEventListener('click', () => copyTypeSchema(entry?.typeJson, 'yaml'));
 
   // Wire the schema-save button — validates JSON client-side, POSTs to
   // /mesh/queries/registered/{name}/schema which re-fan-outs.
@@ -2218,6 +2256,119 @@ async function openRuntimeTableDetail(name) {
       btn.disabled = false;
     }
   });
+}
+
+/** Copy a JVS type either as JSON (pretty-printed) or as YAML. YAML
+ *  conversion is client-side — no round-trip through YAML.stringify;
+ *  we just format the well-known JVS shape by hand for readability. */
+function copyTypeSchema(typeJson, fmt) {
+  const msg = $('#runtime-copy-msg');
+  if (!typeJson) return;
+  let out;
+  try {
+    if (fmt === 'yaml') {
+      out = jvsTypeToYaml(JSON.parse(typeJson));
+    } else {
+      out = JSON.stringify(JSON.parse(typeJson), null, 2);
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = 'parse error: ' + e.message; }
+    return;
+  }
+  navigator.clipboard.writeText(out).then(() => {
+    if (msg) { msg.style.color = 'var(--success)'; msg.textContent = `✓ copied as ${fmt}`; }
+  }).catch(e => {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = 'clipboard denied: ' + e.message; }
+  });
+}
+
+/** Format a parsed JVS type as YAML. Trivial for this well-known shape
+ *  ({name, fields:[{name,type}]}) — no generic YAML lib needed. */
+function jvsTypeToYaml(t) {
+  const lines = [`name: ${t.name}`, `fields:`];
+  for (const f of (t.fields || [])) {
+    lines.push(`  - name: ${f.name}`);
+    lines.push(`    type: ${f.type}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Open the batch-write modal. User pastes SQL statements separated by
+ *  ";;" (or newlines with no separator), picks format + prefix + whether
+ *  to register each, hits Run. Sequential POST /mesh/queries/write/batch. */
+function openBatchWriteDialog() {
+  const dlg = $('#batch-write-dialog');
+  const results = $('#batch-write-results');
+  if (!dlg) return;
+  results.innerHTML = '';
+  $('#batch-write-summary').textContent = '';
+  dlg.showModal();
+}
+
+async function runBatchWrite() {
+  const raw = $('#batch-write-sqls').value || '';
+  const format = $('#batch-write-format').value;
+  const register = $('#batch-write-register').checked;
+  const prefix = ($('#batch-write-prefix').value || 'batch').trim();
+  const results = $('#batch-write-results');
+  const summary = $('#batch-write-summary');
+
+  // Split on ";;" first; fall back to newline splitting if that produced
+  // one item (means user wrote one SQL per line without the separator).
+  let sqls = raw.split(';;').map(s => s.trim()).filter(Boolean);
+  if (sqls.length <= 1 && raw.includes('\n')) {
+    sqls = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  }
+  if (!sqls.length) {
+    summary.style.color = 'var(--danger)';
+    summary.textContent = 'no SQL statements';
+    return;
+  }
+
+  const queries = sqls.map((sql, i) => ({
+    sql,
+    tableName: `${prefix}_${i}`,
+  }));
+
+  summary.style.color = '';
+  summary.textContent = `running ${queries.length} query(s)…`;
+  results.innerHTML = '';
+
+  try {
+    const r = await api('/mesh/queries/write/batch', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({format, register, queries}),
+    });
+    summary.style.color = r.success ? 'var(--success)' : 'var(--danger)';
+    summary.textContent = `${r.successes}/${r.totalQueries} succeeded · ${r.totalRowsWritten} total rows · ${r.elapsedMs}ms`;
+    results.innerHTML = `
+      <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
+        <thead><tr>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">#</th>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">status</th>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">table</th>
+          <th style="text-align:right;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">rows</th>
+          <th style="text-align:right;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">ms</th>
+        </tr></thead>
+        <tbody>
+          ${r.results.map(x => `
+            <tr>
+              <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${x.index}</td>
+              <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">
+                ${x.success ? '<span style="color:var(--success)">✓</span>' : `<span style="color:var(--danger)" title="${esc(x.error || '')}">✗</span>`}
+              </td>
+              <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${x.registered?.tableName ? '<code>' + esc(x.registered.tableName) + '</code>' : (x.error ? '<span class="meta">' + esc(x.error).substring(0, 60) + '</span>' : '<span class="meta">—</span>')}</td>
+              <td style="text-align:right;padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${x.rowsWritten ?? '-'}</td>
+              <td style="text-align:right;padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${x.elapsedMs ?? '-'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+    if (register) refreshRuntimeTablesPanel();
+  } catch (e) {
+    summary.style.color = 'var(--danger)';
+    summary.textContent = 'batch failed: ' + (e.message || e);
+  }
 }
 
 async function unregisterRuntimeTable(name) {
@@ -2935,6 +3086,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#pg-run').addEventListener('click', runPlaygroundQuery);
   $('#pg-write-btn')?.addEventListener('click', writePlaygroundQuery);
+  $('#pg-write-batch-btn')?.addEventListener('click', openBatchWriteDialog);
+  $('#batch-write-run')?.addEventListener('click', runBatchWrite);
   // Live-preview the resolved path as user types + changes format
   $('#pg-write-path')?.addEventListener('input',  updateWriteResolvedHint);
   $('#pg-write-format')?.addEventListener('change', updateWriteResolvedHint);
@@ -2947,6 +3100,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pg-runtime-reconcile')?.addEventListener('click', ev => {
     ev.preventDefault();
     reconcileRuntimeTables();
+  });
+  // Live filter over rendered runtime-table rows.
+  $('#pg-runtime-search')?.addEventListener('input', ev => {
+    const q = (ev.target.value || '').toLowerCase().trim();
+    document.querySelectorAll('#pg-runtime-tables tbody tr').forEach(tr => {
+      const name = tr.querySelector('code')?.textContent?.toLowerCase() || '';
+      tr.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
   });
   // Auto-refresh runtime tables panel when the tab regains focus —
   // catches unregisters/registers done from another tab or curl.
@@ -3483,7 +3644,7 @@ function wireFleetHandlers() {
     refresh._wired = true;
     refresh.addEventListener('click', loadFleetServices);
   }
-  ['fleet-log-close', 'fleet-manifest-close', 'runtime-table-close', 'reconcile-close'].forEach(id => {
+  ['fleet-log-close', 'fleet-manifest-close', 'runtime-table-close', 'reconcile-close', 'batch-write-close'].forEach(id => {
     const b = $('#' + id);
     if (b && !b._wired) { b._wired = true; b.addEventListener('click', () => b.closest('dialog').close()); }
   });

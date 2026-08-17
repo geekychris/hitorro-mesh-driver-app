@@ -485,6 +485,11 @@
                      style="flex: 1; margin: 0;"
                      title="Bare name → default location. Explicit URIs (file:/… / s3://…) used as-is.">
               <button id="pg-write-btn" class="secondary" style="margin: 0;">↓ Write</button>
+              <button id="pg-write-batch-btn" class="secondary outline"
+                      style="margin: 0;"
+                      title="Run multiple SELECTs sequentially (edit them in the modal that opens)">
+                ↓↓ Batch
+              </button>
             </div>
             <!-- Register-as-broadcast-table hook — fans out a
                  RegisterTableMessage over NATS so every live agent
@@ -526,6 +531,10 @@
                  style="margin-left:0.5rem;text-decoration:none;font-size:0.8rem;">
                 🧹 reconcile from inventory
               </a>
+              <input type="text" id="pg-runtime-search"
+                     placeholder="filter…"
+                     style="margin-left:0.5rem;padding:0.1rem 0.4rem;font-size:0.8rem;width:8rem;"
+                     title="Case-insensitive substring filter on table name">
             </legend>
             <div id="pg-runtime-tables"></div>
           </fieldset>
@@ -1154,6 +1163,41 @@
           <button id="runtime-table-close" class="secondary outline" style="margin:0;padding:0.15rem 0.9rem;">Close</button>
         </header>
         <div id="runtime-table-body" style="max-height:70vh;overflow:auto;font-size:0.85rem;"></div>
+      </article>
+    </dialog>
+
+    <!-- Batch write dialog — N SQL statements, one line each -->
+    <dialog id="batch-write-dialog" style="width:min(760px,95vw); max-height:85vh;">
+      <article>
+        <header style="display:flex;align-items:center;gap:0.5rem;">
+          <span><b>Batch write</b> <small class="meta">— one SQL per line, ";;" between statements</small></span>
+          <span style="flex:1"></span>
+          <button id="batch-write-close" class="secondary outline" style="margin:0;padding:0.15rem 0.9rem;">Cancel</button>
+        </header>
+        <textarea id="batch-write-sqls" placeholder="SELECT alpha3 FROM iso_639_3 LIMIT 5;;
+SELECT alpha3, reference_name FROM iso_639_3 WHERE alpha3 = 'ita';;
+SELECT alpha3 FROM iso_639_3 LIMIT 10"
+                  style="width:100%;min-height:12rem;font-family:ui-monospace,monospace;font-size:0.85rem;"></textarea>
+        <div class="row" style="align-items:center;gap:0.5rem;margin-top:0.3rem;">
+          <label style="margin:0;">Format
+            <select id="batch-write-format" style="margin:0 0.4rem;">
+              <option value="ndjson">ndjson</option><option value="parquet">parquet</option>
+            </select>
+          </label>
+          <label style="margin:0;display:flex;align-items:center;gap:0.35rem;">
+            <input type="checkbox" id="batch-write-register" checked>
+            Register each as broadcast table
+          </label>
+          <input type="text" id="batch-write-prefix"
+                 placeholder="table-name prefix (batch)"
+                 style="flex:1;margin:0;font-size:0.85rem;"
+                 title="Each output derives name = &lt;prefix&gt;_&lt;index&gt;">
+        </div>
+        <footer style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;">
+          <span id="batch-write-summary" class="meta" style="flex:1;align-self:center;"></span>
+          <button id="batch-write-run" class="secondary" style="padding:0.15rem 0.9rem;">▶ Run batch</button>
+        </footer>
+        <div id="batch-write-results" style="max-height:20rem;overflow:auto;margin-top:0.5rem;"></div>
       </article>
     </dialog>
 
