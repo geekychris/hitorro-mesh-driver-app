@@ -518,6 +518,42 @@
                and populated on tab load. Each row has an unregister button
                that DELETEs /mesh/tables/{name} which drops the driver-side
                entry + fans out UnregisterTableMessage to agents. -->
+          <!-- Register-existing panel — for files a pipeline / external
+               system already wrote. No SQL runs; the driver just verifies
+               the URI is readable and fan-outs a RegisterTableMessage. -->
+          <fieldset style="margin: 0.5rem 0 0; padding: 0.6rem 0.75rem; border: 1px solid #d5d5d5; border-radius: 4px;">
+            <legend style="padding: 0 0.4rem;"><b>Register existing file</b>
+              <span class="meta">— skip the SQL, just publish a URI as a table</span></legend>
+            <div class="row" style="align-items: center; gap: 0.5rem; margin: 0;">
+              <label style="margin: 0;">Format
+                <select id="pg-re-format" style="margin: 0 0.4rem;">
+                  <option value="ndjson">ndjson</option>
+                  <option value="parquet">parquet</option>
+                </select>
+              </label>
+              <input type="text" id="pg-re-uri"
+                     placeholder="file:/… or s3://bucket/key.ndjson"
+                     style="flex: 1; margin: 0;"
+                     title="Full URI to an existing file the driver + agents can read.">
+              <button id="pg-re-btn" class="secondary" style="margin: 0;">↩ Register</button>
+            </div>
+            <div class="row" style="align-items: center; gap: 0.5rem; margin: 0.4rem 0 0;">
+              <input type="text" id="pg-re-tablename"
+                     placeholder="table name (required)"
+                     style="flex: 1; margin: 0;"
+                     title="Logical SQL name — SELECT * FROM <name> after register">
+              <label style="margin: 0; display: flex; align-items: center; gap: 0.35rem;">
+                <input type="checkbox" id="pg-re-broadcast" checked>
+                Broadcast (uncheck for partitioned)
+              </label>
+              <input type="text" id="pg-re-pk"
+                     placeholder="partitionKey (only when not broadcast)"
+                     style="width: 12rem; margin: 0;"
+                     title="Required when Broadcast is off — convention: 'all'">
+            </div>
+            <p id="pg-re-status" class="meta" style="margin: 0.3rem 0 0;"></p>
+          </fieldset>
+
           <fieldset id="pg-runtime-tables-fs" style="margin: 0.5rem 0 0; padding: 0.6rem 0.75rem; border: 1px solid #d5d5d5; border-radius: 4px;" hidden>
             <legend style="padding: 0 0.4rem;"><b>Runtime-registered tables</b>
               <span class="meta">— this driver session</span>

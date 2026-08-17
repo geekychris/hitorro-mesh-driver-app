@@ -2425,6 +2425,45 @@ async function runBatchWrite() {
   }
 }
 
+/** Register an existing file (no SQL, no sink). Reads form values off
+ *  the Register-existing panel, POSTs to /mesh/queries/register-existing,
+ *  refreshes the runtime-tables panel on success. */
+async function registerExistingFromPanel() {
+  const uri       = ($('#pg-re-uri').value || '').trim();
+  const name      = ($('#pg-re-tablename').value || '').trim();
+  const format    = $('#pg-re-format').value;
+  const broadcast = $('#pg-re-broadcast').checked;
+  const pk        = ($('#pg-re-pk').value || '').trim();
+  const status    = $('#pg-re-status');
+
+  if (!uri)  { status.style.color = 'var(--danger)'; status.textContent = 'uri is required'; return; }
+  if (!name) { status.style.color = 'var(--danger)'; status.textContent = 'table name is required'; return; }
+  if (!broadcast && !pk) {
+    status.style.color = 'var(--danger)';
+    status.textContent = 'partitionKey is required when broadcast is off';
+    return;
+  }
+
+  status.style.color = '';
+  status.textContent = 'registering…';
+  try {
+    const body = {name, uri, format, broadcast};
+    if (!broadcast) body.partitionKey = pk;
+    const r = await api('/mesh/queries/register-existing', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (r.error) throw new Error(r.error);
+    status.style.color = 'var(--success)';
+    status.innerHTML = `✓ registered <code>${esc(r.tableName)}</code> on ${r.agentsNotified} agent(s)`
+      + ` — try <code>SELECT * FROM ${esc(r.tableName)}</code>`;
+    refreshRuntimeTablesPanel();
+  } catch (e) {
+    status.style.color = 'var(--danger)';
+    status.textContent = 'register failed: ' + (e.message || e);
+  }
+}
+
 async function unregisterRuntimeTable(name) {
   if (!confirm(`Unregister "${name}" from the mesh? This drops the driver-side entry AND removes it from every agent's runtime registry.`)) return;
   try {
@@ -3158,6 +3197,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pg-write-btn')?.addEventListener('click', writePlaygroundQuery);
   $('#pg-write-batch-btn')?.addEventListener('click', openBatchWriteDialog);
   $('#batch-write-run')?.addEventListener('click', runBatchWrite);
+  $('#pg-re-btn')?.addEventListener('click', registerExistingFromPanel);
   // Live-preview the resolved path as user types + changes format
   $('#pg-write-path')?.addEventListener('input',  updateWriteResolvedHint);
   $('#pg-write-format')?.addEventListener('change', updateWriteResolvedHint);
