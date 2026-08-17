@@ -283,6 +283,53 @@ public class MinioLifecycleService {
         return runScript(dir, name, stdout, new String[0]);
     }
 
+    /**
+     * Streaming variant of {@link #runScript} — invokes {@code onLine}
+     * for every stdout line as it arrives. Used by the SSE sync
+     * endpoint so the UI can show live mc-mirror progress instead of
+     * waiting for the whole script to finish before displaying anything.
+     *
+     * @return the script exit code
+     */
+    public int runScriptStreaming(String name, String[] args,
+                                  java.util.function.Consumer<String> onLine)
+            throws IOException, InterruptedException {
+        File dir = findScriptsDir();
+        if (dir == null) throw new IllegalStateException("MinIO scripts dir not found.");
+        File script = new File(dir, name);
+        if (!script.canExecute()) script.setExecutable(true, true);
+        List<String> cmd = new ArrayList<>();
+        cmd.add("/bin/bash");
+        cmd.add(script.getAbsolutePath());
+        for (String a : args) cmd.add(a);
+        Process p = new ProcessBuilder(cmd)
+                .directory(dir).redirectErrorStream(true).start();
+        try (var reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(p.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                onLine.accept(line);
+            }
+        }
+        if (!p.waitFor(600, TimeUnit.SECONDS)) {
+            p.destroyForcibly();
+            throw new IOException(name + " timed out after 600s");
+        }
+        return p.exitValue();
+    }
+
+    /** Validate + normalise a dataset id or throw. Same rules as {@link #sync}. */
+    public void validateDataset(String dataset) {
+        if (dataset != null && !dataset.isBlank() && !dataset.matches("[a-zA-Z0-9._-]+")) {
+            throw new IllegalArgumentException("invalid dataset id: " + dataset);
+        }
+    }
+
+    /** Whether MinIO is reachable — cheap health check. */
+    public boolean isReachable() {
+        return ping(resolveEndpoint());
+    }
+
     /** Run a shell script from the scripts dir, capturing stdout+stderr. */
     private static int runScript(File dir, String name, List<String> stdout, String[] args)
             throws IOException, InterruptedException {

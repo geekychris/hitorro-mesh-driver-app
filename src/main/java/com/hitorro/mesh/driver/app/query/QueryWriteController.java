@@ -91,6 +91,165 @@ public class QueryWriteController {
         return runtimeTracker.snapshot();
     }
 
+    /** Request body for {@link #registerExisting}. */
+    public static final class RegisterExistingRequest {
+        public String name;
+        public String uri;
+        public String format = "ndjson";
+        public String typeJson;   // optional — omit to induce from sample rows
+    }
+
+    /** Request body for {@link #registerStreaming}. */
+    public static final class RegisterStreamingRequest {
+        public String name;
+        public String format;                       // "kafka" | "nats"
+        public String typeJson;                     // REQUIRED — no induction for streams
+        public java.util.Map<String, String> sourceConfig;
+    }
+
+    /**
+     * Register a streaming source (Kafka topic or NATS JetStream) as a
+     * queryable table on every agent. No SQL / sink / file — the agent
+     * subscribes and streams rows on demand.
+     *
+     * <p>Body shape:</p>
+     * <pre>{
+     *   "name": "events",
+     *   "format": "kafka",
+     *   "typeJson": "{…}",
+     *   "sourceConfig": {
+     *     "bootstrap-servers": "localhost:9092",
+     *     "group-id": "mesh-events",
+     *     "topic": "events"
+     *   }
+     * }</pre>
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/register-streaming")
+    public Map<String, Object> registerStreaming(@RequestBody RegisterStreamingRequest req) throws Exception {
+        requireNonBlank("name", req.name);
+        requireNonBlank("format", req.format);
+        requireNonBlank("typeJson", req.typeJson);
+        if (req.sourceConfig == null || req.sourceConfig.isEmpty()) {
+            throw new IllegalArgumentException("sourceConfig is required");
+        }
+        String format = req.format.toLowerCase();
+        if (!"kafka".equals(format) && !"nats".equals(format)) {
+            throw new IllegalArgumentException("format must be 'kafka' or 'nats'; got " + format);
+        }
+
+        Type type = new Type();
+        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        driver.tables().registerBroadcast(req.name);
+        DistributedTable.Partition part = new DistributedTable.Partition(
+                "broadcast", java.util.Set.of("jvssql"), -1L);
+        driver.tables().register(new RegisteredWriteTable(
+                req.name, type, java.util.List.of(part)));
+
+        // Streaming: uri is unused; sourceConfig carries the topic/subject.
+        RegisterTableMessage msg = new RegisterTableMessage(
+                req.name, req.typeJson, /*uri=*/"", format, true, null, req.sourceConfig);
+        driver.publishRegisterTable(msg);
+        int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+        runtimeTracker.record(msg, agentCount);
+
+        log.info("registered streaming source as table {} ({}, agents={})",
+                req.name, format, agentCount);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("tableName", req.name);
+        out.put("format", format);
+        out.put("sourceConfig", req.sourceConfig);
+        out.put("agentsNotified", agentCount);
+        return out;
+    }
+
+    /**
+     * Register an EXISTING file as a queryable table — no SQL, no sink.
+     * Reads the first few lines/rows for type induction if
+     * {@code typeJson} is omitted. Same driver-side dual registration +
+     * agent fan-out as write-with-register.
+     *
+     * <p>Powers "I have an NDJson/Parquet file that a pipeline produced
+     * — make it queryable" without needing to re-run any SQL through
+     * the mesh.</p>
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/register-existing")
+    public Map<String, Object> registerExisting(@RequestBody RegisterExistingRequest req) throws Exception {
+        requireNonBlank("name", req.name);
+        requireNonBlank("uri", req.uri);
+        String format = (req.format == null || req.format.isBlank() ? "ndjson" : req.format).toLowerCase();
+
+        // Verify the file is readable before we announce it to every agent.
+        com.hitorro.util.basefile.fs.BaseFile bf =
+                com.hitorro.util.basefile.fs.BaseFileSystem.getBaseFileFromPath(req.uri);
+        if (bf == null || !bf.exists()) {
+            throw new IllegalArgumentException("cannot register: file not found at " + req.uri);
+        }
+
+        // Type: either explicit or induced from first N sample rows.
+        String typeJson;
+        if (req.typeJson != null && !req.typeJson.isBlank()) {
+            typeJson = req.typeJson;
+        } else {
+            List<JsonNode> sample = sampleForInduction(bf, format);
+            if (sample.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "cannot induce type — sample was empty (pass typeJson explicitly)");
+            }
+            typeJson = induceTypeJson(req.name, sample);
+        }
+
+        // Same dual-registration pattern as write-with-register.
+        Type type = new Type();
+        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(typeJson));
+        driver.tables().registerBroadcast(req.name);
+        DistributedTable.Partition part = new DistributedTable.Partition(
+                "broadcast", java.util.Set.of("jvssql"), -1L);
+        driver.tables().register(new RegisteredWriteTable(
+                req.name, type, java.util.List.of(part)));
+
+        RegisterTableMessage msg = new RegisterTableMessage(
+                req.name, typeJson, req.uri, format, true, null);
+        driver.publishRegisterTable(msg);
+        int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+        runtimeTracker.record(msg, agentCount);
+
+        log.info("registered existing file as table {} ({}, uri={}, agents={})",
+                req.name, format, req.uri, agentCount);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("tableName", req.name);
+        out.put("typeJson", typeJson);
+        out.put("uri", req.uri);
+        out.put("format", format);
+        out.put("broadcast", true);
+        out.put("agentsNotified", agentCount);
+        return out;
+    }
+
+    /** Read up to {@code TYPE_INDUCTION_SAMPLE_SIZE} rows for type
+     *  induction. NDJson: parse the first N lines. Parquet: skipped —
+     *  caller must supply typeJson (schema is embedded in the file
+     *  footer and inspection would drag parquet-avro in). */
+    private static List<JsonNode> sampleForInduction(
+            com.hitorro.util.basefile.fs.BaseFile bf, String format) throws IOException {
+        if (!"ndjson".equalsIgnoreCase(format)) {
+            // Parquet or other — caller supplies typeJson (schema is in
+            // the file footer; safer to trust the user).
+            return List.of();
+        }
+        List<JsonNode> out = new java.util.ArrayList<>();
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        try (java.io.InputStream is = bf.getInputStream();
+             java.io.BufferedReader r = new java.io.BufferedReader(
+                     new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null && out.size() < TYPE_INDUCTION_SAMPLE_SIZE) {
+                if (line.isBlank() || line.startsWith("#")) continue;
+                out.add(json.readTree(line));
+            }
+        }
+        return out;
+    }
+
     /**
      * Live per-agent install inventory for a runtime-registered table.
      * Fires a fan-out request over NATS and collects responses within

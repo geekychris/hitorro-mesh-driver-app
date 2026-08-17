@@ -1108,7 +1108,9 @@ function renderStorage(s) {
 
   // Wire lifecycle controls after the innerHTML swap.
   $('#minio-start-btn').addEventListener('click', () => minioAction('start'));
-  $('#minio-sync-btn').addEventListener('click', () => minioAction('sync'));
+  // Full-tree sync uses the SSE stream so the button shows live mc output
+  // instead of blocking for the whole script duration.
+  $('#minio-sync-btn').addEventListener('click', () => streamSync(''));
   $('#minio-stop-btn').addEventListener('click', () => minioAction('stop'));
   refreshMinioStatus();
 
@@ -1453,26 +1455,49 @@ async function refreshMinioStatus() {
   }
 }
 
-/** Sync one dataset — narrower than the full Sync-datasets button.
- *  Wired in renderStorage on each row of the dataset presence matrix. */
-async function syncOneDataset(datasetId) {
+/** Sync one dataset via SSE — streams mc-mirror stdout live to the
+ *  status message so long syncs show progress instead of freezing. */
+function syncOneDataset(datasetId) { streamSync(datasetId); }
+
+/** SSE-driven sync — used by both per-dataset and full-tree buttons.
+ *  Empty datasetId = full tree. Handles reconnect/complete transparently. */
+function streamSync(datasetId) {
   const msg = $('#minio-status-msg');
-  if (msg) msg.innerHTML = `<span class="meta">syncing ${esc(datasetId)}…</span>`;
-  try {
-    const r = await api('/mesh/storage/minio/sync?dataset=' + encodeURIComponent(datasetId),
-                        { method: 'POST' });
-    if (!r.success) throw new Error(r.error || 'sync failed');
-    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)} — refreshing matrix…</span>`;
-    // Wait a beat for MinIO to reflect the just-uploaded objects in a
-    // subsequent list — mc mirror is synchronous but the bucket list
-    // occasionally lags on the very-fresh listing.
-    await new Promise(r => setTimeout(r, 500));
-    const storage = await api('/mesh/storage');
-    renderStorage(storage);
-    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)}</span>`;
-  } catch (e) {
-    if (msg) msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message || e)}</span>`;
-  }
+  const label = datasetId || 'all datasets';
+  const url = '/mesh/storage/minio/sync/stream'
+            + (datasetId ? '?dataset=' + encodeURIComponent(datasetId) : '');
+  if (msg) msg.innerHTML = `<span class="meta">syncing ${esc(label)}… <span id="sync-tail" style="font-family:ui-monospace,monospace;font-size:0.75rem;color:#666;"></span></span>`;
+  const es = new EventSource(url);
+  let lastLine = '';
+  es.addEventListener('line', ev => {
+    lastLine = ev.data;
+    const tail = $('#sync-tail');
+    if (tail) {
+      // Show the last line only — mc mirror updates the same status
+      // line repeatedly, so a full log would be noisy.
+      tail.textContent = ' · ' + (lastLine.length > 100
+          ? '…' + lastLine.substring(lastLine.length - 100)
+          : lastLine);
+    }
+  });
+  es.addEventListener('done', async ev => {
+    es.close();
+    let rc = -1;
+    try { rc = JSON.parse(ev.data).exitCode; } catch (_) { }
+    if (rc === 0) {
+      if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(label)} — refreshing matrix…</span>`;
+      await new Promise(r => setTimeout(r, 500));
+      const storage = await api('/mesh/storage');
+      renderStorage(storage);
+      if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(label)}</span>`;
+    } else {
+      if (msg) msg.innerHTML = `<span style="color:var(--danger)">sync ${esc(label)} exited ${rc} — see driver logs</span>`;
+    }
+  });
+  es.addEventListener('error', ev => {
+    es.close();
+    if (msg) msg.innerHTML = `<span style="color:var(--danger)">sync stream error${ev.data ? ': ' + esc(ev.data) : ''}</span>`;
+  });
 }
 
 /** Kick /mesh/storage/minio/{start|stop}, then reload storage summary +
