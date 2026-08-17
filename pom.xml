@@ -251,6 +251,21 @@
             <version>3.0.1</version>
         </dependency>
 
+        <!-- Parquet output for /mesh/queries/write. Optional — the write
+             controller reflectively loads ParquetFileSink so a driver
+             built without this dep still boots; format=parquet requests
+             then fail with a clear "add hitorro-streams-parquet" error. -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-streams-parquet</artifactId>
+            <version>3.0.1</version>
+            <optional>true</optional>
+            <exclusions>
+                <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
+                <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-jvstype</artifactId>

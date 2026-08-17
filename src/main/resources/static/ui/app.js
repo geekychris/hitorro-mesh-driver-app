@@ -1543,6 +1543,43 @@ function renderHistory() {
 let lastResult = null;
 let tableSort = { col: null, dir: 1 };   // 1 = asc, -1 = desc
 
+/**
+ * Execute the Playground SQL and write results to a storage URI as NDJson
+ * or Parquet — hits POST /mesh/queries/write, which routes via BaseFile
+ * so file:/… lands on disk and s3://… lands in MinIO (when configured).
+ */
+async function writePlaygroundQuery() {
+  const sql       = getSql().trim();
+  const format    = $('#pg-write-format').value;
+  const path      = ($('#pg-write-path').value || '').trim();
+  const timeoutMs = Math.max(+$('#pg-timeout').value || 5000, 30000); // writes get ≥ 30s
+  const statusEl  = $('#pg-write-status');
+  if (!sql)  { statusEl.textContent = 'no SQL — nothing to write'; return; }
+  if (!path) { statusEl.textContent = 'destination path is required (e.g. file:./out.parquet or s3://bucket/key)'; return; }
+
+  statusEl.textContent = `writing ${format} → ${path} …`;
+  const t0 = performance.now();
+  try {
+    const r = await api('/mesh/queries/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sql, format, path, timeoutMs }),
+    });
+    const dtMs = Math.round(performance.now() - t0);
+    if (r.success) {
+      statusEl.style.color = 'var(--success)';
+      statusEl.innerHTML = `✅ wrote <b>${r.rowsWritten.toLocaleString()}</b> rows `
+        + `→ <code>${esc(r.path)}</code> in ${dtMs}ms`;
+    } else {
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = 'write failed: ' + (r.error || 'unknown error');
+    }
+  } catch (e) {
+    statusEl.style.color = 'var(--danger)';
+    statusEl.textContent = 'write failed: ' + (e.message || e);
+  }
+}
+
 async function runPlaygroundQuery() {
   const sql = getSql().trim();
   const timeoutMs = +$('#pg-timeout').value || 5000;
@@ -2064,6 +2101,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderSavedList();
 
   $('#pg-run').addEventListener('click', runPlaygroundQuery);
+  $('#pg-write-btn')?.addEventListener('click', writePlaygroundQuery);
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
     $('#pg-result').hidden = true;
