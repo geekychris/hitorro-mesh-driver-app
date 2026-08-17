@@ -2222,14 +2222,22 @@ async function reconcileRuntimeTables() {
       summary.textContent = `${r.agentsReplied}/${r.agentsAsked} agents replied`;
       return;
     }
+    const orphanCount = r.candidates.filter(c => !c.trackedByDriver).length;
     body.innerHTML = `
       <p class="meta" style="margin:0 0 0.4rem;">
         ${r.count} distinct runtime entries across ${r.agentsReplied}/${r.agentsAsked} agent(s).
-        Untracked = orphan from a previous driver session. Pick which to unregister:
+        ${orphanCount > 0
+          ? `<b>${orphanCount} orphan(s)</b> pre-selected (agents hold entries the driver's tracker doesn't know about).`
+          : 'No orphans — everything is tracked. Selection empty by default to prevent accidents.'}
       </p>
+      <div style="margin:0.3rem 0;font-size:0.8rem;">
+        <a href="#" id="reconcile-select-orphans">select orphans</a> ·
+        <a href="#" id="reconcile-select-all-link">select all</a> ·
+        <a href="#" id="reconcile-select-none">clear</a>
+      </div>
       <table style="width:100%;font-size:0.85rem;">
         <thead><tr>
-          <th style="width:1.5rem;padding:0.15rem 0.4rem;"><input type="checkbox" id="reconcile-check-all" checked title="Select all" style="margin:0;"></th>
+          <th style="width:1.5rem;padding:0.15rem 0.4rem;"></th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">table</th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">pk</th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">held by</th>
@@ -2239,9 +2247,11 @@ async function reconcileRuntimeTables() {
           ${r.candidates.map((c, i) => `
             <tr>
               <td style="padding:0.15rem 0.4rem;">
-                <input type="checkbox" class="reconcile-check" checked
+                <input type="checkbox" class="reconcile-check"
+                       ${c.trackedByDriver ? '' : 'checked'}
                        data-name="${esc(c.name)}"
                        data-pk="${esc(c.partitionKey ?? '')}"
+                       data-orphan="${c.trackedByDriver ? '0' : '1'}"
                        style="margin:0;">
               </td>
               <td style="padding:0.15rem 0.4rem;"><code>${esc(c.name)}</code></td>
@@ -2252,15 +2262,26 @@ async function reconcileRuntimeTables() {
           `).join('')}
         </tbody>
       </table>`;
-    // Wire select-all + count updater.
     const updateSelectedCount = () => {
       const n = document.querySelectorAll('.reconcile-check:checked').length;
       summary.textContent = `${n} of ${r.count} selected`;
     };
     document.querySelectorAll('.reconcile-check').forEach(cb =>
       cb.addEventListener('change', updateSelectedCount));
-    $('#reconcile-check-all').addEventListener('change', ev => {
-      document.querySelectorAll('.reconcile-check').forEach(cb => cb.checked = ev.target.checked);
+    $('#reconcile-select-orphans')?.addEventListener('click', ev => {
+      ev.preventDefault();
+      document.querySelectorAll('.reconcile-check').forEach(cb =>
+        cb.checked = cb.dataset.orphan === '1');
+      updateSelectedCount();
+    });
+    $('#reconcile-select-all-link')?.addEventListener('click', ev => {
+      ev.preventDefault();
+      document.querySelectorAll('.reconcile-check').forEach(cb => cb.checked = true);
+      updateSelectedCount();
+    });
+    $('#reconcile-select-none')?.addEventListener('click', ev => {
+      ev.preventDefault();
+      document.querySelectorAll('.reconcile-check').forEach(cb => cb.checked = false);
       updateSelectedCount();
     });
     updateSelectedCount();

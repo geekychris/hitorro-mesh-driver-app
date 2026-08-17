@@ -360,6 +360,25 @@ public class QueryWriteController {
         Type parsedType = new Type();
         parsedType.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
 
+        // Verify the source file is still readable — a schema-update
+        // announces a re-load to every agent, so we want to refuse if
+        // the underlying file was moved/deleted. (The register-time
+        // check on write is defensive-only because the sink just
+        // created the file; this call site has no such freshness.)
+        try {
+            com.hitorro.util.basefile.fs.BaseFile bf =
+                    com.hitorro.util.basefile.fs.BaseFileSystem.getBaseFileFromPath(existing.uri());
+            if (bf == null || !bf.exists()) {
+                throw new IllegalArgumentException(
+                        "cannot update schema: source file no longer readable at " + existing.uri());
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "cannot update schema: BaseFile check for " + existing.uri() + " failed: " + e.getMessage());
+        }
+
         // Re-register with the new type. broadcast-name stays the same;
         // distributed entry replaces itself.
         RegisterTableMessage msg = new RegisterTableMessage(
@@ -419,7 +438,7 @@ public class QueryWriteController {
 
             if (req.register && rows > 0) {
                 out.put("registered", registerAsTable(req, resolved, format,
-                        collected.get(0), req.typeJsonOverride));
+                        collected, req.typeJsonOverride));
             } else if (req.register) {
                 out.put("registered", Map.of("skipped", "no rows written; nothing to register"));
             }
@@ -518,14 +537,14 @@ public class QueryWriteController {
      * and call {@code POST /mesh/broadcast-tables} directly.
      */
     private Map<String, Object> registerAsTable(WriteRequest req, String resolvedUri,
-                                                String format, JsonNode firstRow,
+                                                String format, List<JsonNode> rows,
                                                 String typeJsonOverride) {
         String name = req.tableName != null && !req.tableName.isBlank()
                 ? req.tableName.trim()
                 : deriveTableName(req.path, format);
         String typeJson = typeJsonOverride != null && !typeJsonOverride.isBlank()
                 ? typeJsonOverride
-                : induceTypeJson(name, firstRow);
+                : induceTypeJson(name, rows);
 
         // Fail-fast URI validity check — verify the driver can see the
         // file before we announce it to every agent. Avoids a silent
@@ -615,25 +634,72 @@ public class QueryWriteController {
             java.util.List<DistributedTable.Partition> partitions
     ) implements DistributedTable {}
 
-    private static String induceTypeJson(String name, JsonNode firstRow) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"name\":\"").append(name).append("\",\"fields\":[");
-        boolean first = true;
-        java.util.Iterator<String> it = firstRow.fieldNames();
+    /** Number of rows scanned for type induction. Trade-off: more rows =
+     *  better inference on nullable columns, more per-write CPU. 10 is
+     *  enough that "first row null" false-positives are rare in practice. */
+    static final int TYPE_INDUCTION_SAMPLE_SIZE = 10;
+
+    /**
+     * Induce a JVS type by scanning up to {@link #TYPE_INDUCTION_SAMPLE_SIZE}
+     * rows, picking the strongest type per column:
+     * <ul>
+     *   <li>All-numeric integral → {@code core_long}</li>
+     *   <li>All-numeric, any fractional → {@code core_double}</li>
+     *   <li>All-boolean → {@code core_boolean}</li>
+     *   <li>Anything else (mixed, string, nested, null-only) → {@code core_string}</li>
+     * </ul>
+     * Nulls are ignored — a column that's null in row 1 but numeric in
+     * rows 2-10 correctly infers as numeric.
+     */
+    static String induceTypeJson(String name, List<JsonNode> rows) {
+        // Preserve first-row column order — that's what most users expect.
+        java.util.LinkedHashMap<String, String> types = new java.util.LinkedHashMap<>();
+        JsonNode first = rows.get(0);
+        java.util.Iterator<String> it = first.fieldNames();
         while (it.hasNext()) {
             String fn = it.next();
-            JsonNode v = firstRow.get(fn);
-            String jvsType = switch (v.getNodeType()) {
-                case NUMBER  -> v.isIntegralNumber() ? "core_long" : "core_double";
-                case BOOLEAN -> "core_boolean";
-                default      -> "core_string";
-            };
-            if (!first) sb.append(',');
-            sb.append("{\"name\":\"").append(fn).append("\",\"type\":\"").append(jvsType).append("\"}");
-            first = false;
+            String inferred = inferColumnType(fn, rows);
+            types.put(fn, inferred);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"name\":\"").append(name).append("\",\"fields\":[");
+        boolean firstField = true;
+        for (Map.Entry<String, String> e : types.entrySet()) {
+            if (!firstField) sb.append(',');
+            sb.append("{\"name\":\"").append(e.getKey())
+                    .append("\",\"type\":\"").append(e.getValue()).append("\"}");
+            firstField = false;
         }
         sb.append("]}");
         return sb.toString();
+    }
+
+    private static String inferColumnType(String field, List<JsonNode> rows) {
+        int limit = Math.min(rows.size(), TYPE_INDUCTION_SAMPLE_SIZE);
+        boolean seenNonNull = false;
+        boolean allNumeric = true;
+        boolean allBoolean = true;
+        boolean anyFractional = false;
+        for (int i = 0; i < limit; i++) {
+            JsonNode v = rows.get(i).get(field);
+            if (v == null || v.isNull()) continue;
+            seenNonNull = true;
+            switch (v.getNodeType()) {
+                case NUMBER -> {
+                    allBoolean = false;
+                    if (!v.isIntegralNumber()) anyFractional = true;
+                }
+                case BOOLEAN -> allNumeric = false;
+                default -> {
+                    allNumeric = false;
+                    allBoolean = false;
+                }
+            }
+        }
+        if (!seenNonNull) return "core_string";                    // null-only sample
+        if (allNumeric) return anyFractional ? "core_double" : "core_long";
+        if (allBoolean) return "core_boolean";
+        return "core_string";                                       // mixed / string / nested
     }
 
     private static boolean hasScheme(String path) {
