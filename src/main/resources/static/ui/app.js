@@ -939,23 +939,108 @@ function setHealthDot(status, errText) {
 // ================================================================ CLUSTER
 async function refreshCluster() {
   try {
-    const [health, agents, tables, cluster, catalog] = await Promise.all([
+    const [health, agents, tables, cluster, catalog, storage] = await Promise.all([
       api('/actuator/health').catch(() => ({ status: 'UNKNOWN' })),
       api('/mesh/agents'),
       api('/mesh/tables'),
       api('/mesh/cluster').catch(e => ({ error: e.message })),
       api('/mesh/catalog').catch(() => null),
+      api('/mesh/storage').catch(() => null),
     ]);
     renderHealthFriendly(health);
     renderClusterFriendly(cluster);
     renderAgents(agents, cluster);
     renderTables(tables);
     if (catalog) renderCatalog(catalog);
+    if (storage) renderStorage(storage);
     $('#health-json').textContent = fmtJson(health);
     $('#cluster-json').textContent = fmtJson(cluster);
   } catch (e) {
     $('#cluster-friendly').innerHTML = `<div class="cluster-status-callout err"><p class="title">Error loading cluster</p><p>${esc(e.message)}</p></div>`;
   }
+}
+
+/** Renders the Storage layer card on the Cluster tab. */
+function renderStorage(s) {
+  const backendEl = $('#storage-backend-badge');
+  const summaryEl = $('#storage-summary');
+  const matrixEl  = $('#storage-dataset-matrix');
+  if (!backendEl || !summaryEl || !matrixEl) return;
+
+  const local = s.localBackend || {};
+  const s3    = s.s3Backend;
+
+  // Backend badge — "local", "s3+local", or "local (no S3)".
+  let badge;
+  if (s3) {
+    badge = s3.reachable ? 'MinIO / S3 + local' : 'local (S3 configured but unreachable)';
+    backendEl.className = s3.reachable ? 'badge success' : 'badge warning';
+  } else {
+    badge = 'local only';
+    backendEl.className = 'badge';
+  }
+  backendEl.textContent = badge;
+
+  // Summary block.
+  const parts = [];
+  parts.push(`<div><b>Local</b> · <code>${esc(local.root || '?')}</code>`
+    + (local.exists
+        ? ` · ${(local.files || 0).toLocaleString()} files · ${humanBytes(local.bytes || 0)}`
+        : ' · <span style="color:var(--danger)">does not exist</span>')
+    + '</div>');
+  if (s3) {
+    parts.push(`<div><b>MinIO / S3</b> · <code>${esc(s3.endpoint)}</code>`
+      + ` · bucket <code>${esc(s3.bucket)}</code>`
+      + ` · ssl=${s3.ssl}`
+      + ` · reachable=${s3.reachable}</div>`);
+  } else {
+    parts.push('<div class="meta">MinIO / S3 not configured. Set '
+      + '<code>HITORRO_STORAGE_S3_ENDPOINT</code> et al. and restart the driver '
+      + 'to enable S3-backed reads/writes. See <a href="../scripts/minio/minio-up.sh" '
+      + 'title="hitorro-mesh-examples/scripts/minio/">minio-up.sh</a>.</div>');
+  }
+  summaryEl.innerHTML = parts.join('');
+
+  // Per-dataset local/s3 matrix. Only shown when S3 is configured — no
+  // point comparing when there's only one backend.
+  const rows = s.datasets || [];
+  if (s3 && rows.length) {
+    matrixEl.innerHTML = `
+      <details open>
+        <summary><b>Dataset presence</b> <small class="meta">local vs MinIO</small></summary>
+        <table style="width:100%;font-size:0.85rem;margin-top:0.4rem;">
+          <thead><tr>
+            <th style="text-align:left;padding:0.2rem 0.4rem;">dataset</th>
+            <th style="text-align:center;padding:0.2rem 0.4rem;">local</th>
+            <th style="text-align:center;padding:0.2rem 0.4rem;">MinIO</th>
+          </tr></thead>
+          <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td style="padding:0.2rem 0.4rem;"><code>${esc(r.id)}</code></td>
+              <td style="text-align:center;padding:0.2rem 0.4rem;">${r.local ? '✅' : '·'}</td>
+              <td style="text-align:center;padding:0.2rem 0.4rem;">${r.s3    ? '✅' : '·'}</td>
+            </tr>
+          `).join('')}
+          </tbody>
+        </table>
+        <p class="meta" style="margin:0.4rem 0 0;">
+          Ship any local-only dataset up with
+          <code>hitorro-mesh-examples/scripts/minio/minio-sync-datasets.sh</code>.
+        </p>
+      </details>`;
+  } else {
+    matrixEl.innerHTML = '';
+  }
+}
+
+/** kB / MB / GB with one decimal. */
+function humanBytes(n) {
+  if (n < 1024) return n + ' B';
+  const units = ['KB','MB','GB','TB'];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(1) + ' ' + units[i];
 }
 
 // Full dataset catalog view on the Cluster tab — grouped by category,

@@ -48,7 +48,10 @@ public class FleetRegistryAutoConfig {
 
     private static final Logger log = LoggerFactory.getLogger(FleetRegistryAutoConfig.class);
 
-    @Bean(destroyMethod = "close")
+    // destroyMethod = "(inferred)" — Spring auto-detects close() when the
+    // returned instance has one (HealthyFleetEndpointRegistry does); no-ops
+    // silently for Static/Composite which have no resources to release.
+    @Bean(destroyMethod = "(inferred)")
     @ConditionalOnMissingBean(FleetEndpointRegistry.class)
     public FleetEndpointRegistry fleetEndpointRegistry(
             @Value("${hitorro.fleet.endpoints:}") String configured,
