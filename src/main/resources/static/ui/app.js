@@ -1063,14 +1063,23 @@ async function browseStorage(path) {
     const resolved = r.resolved || '(root)';
 
     // Breadcrumb — trim the scheme prefix for readability, split remainder.
+    // `file:` URIs keep an absolute path after the scheme (`file:/Users/…`),
+    // so `acc` must preserve that leading `/`; `s3://bucket/…` treats the
+    // first segment as the bucket and re-adds `//` after the scheme.
     let display = resolved;
-    ['s3://', 'file:', 'http://', 'https://'].forEach(prefix => {
-      if (display.startsWith(prefix)) display = display.substring(prefix.length);
-    });
-    const scheme = resolved.substring(0, resolved.length - display.length);
+    let scheme  = '';
+    let sep     = '';
+    for (const p of ['s3://', 'http://', 'https://', 'file:']) {
+      if (display.startsWith(p)) {
+        scheme  = p;
+        sep     = p.endsWith('//') ? '' : (display.charAt(p.length) === '/' ? '/' : '');
+        display = display.substring(p.length + sep.length);
+        break;
+      }
+    }
     const parts = display.split('/').filter(Boolean);
     const crumbs = [`<a href="#" data-path="">${esc(scheme || '/')}</a>`];
-    let acc = scheme;
+    let acc = scheme + sep;
     parts.forEach((p, i) => {
       acc += p + (i < parts.length - 1 || display.endsWith('/') ? '/' : '');
       crumbs.push(` / <a href="#" data-path="${esc(acc)}">${esc(p)}</a>`);
