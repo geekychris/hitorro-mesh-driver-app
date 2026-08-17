@@ -1004,9 +1004,10 @@ function renderStorage(s) {
   // Per-dataset local/s3 matrix. Only shown when S3 is configured — no
   // point comparing when there's only one backend.
   const rows = s.datasets || [];
+  let matrixHtml = '';
   if (s3 && rows.length) {
-    matrixEl.innerHTML = `
-      <details open>
+    matrixHtml = `
+      <details>
         <summary><b>Dataset presence</b> <small class="meta">local vs MinIO</small></summary>
         <table style="width:100%;font-size:0.85rem;margin-top:0.4rem;">
           <thead><tr>
@@ -1029,9 +1030,93 @@ function renderStorage(s) {
           <code>hitorro-mesh-examples/scripts/minio/minio-sync-datasets.sh</code>.
         </p>
       </details>`;
-  } else {
-    matrixEl.innerHTML = '';
   }
+
+  // Storage browser — click into the S3 bucket or local datasets root.
+  // Backed by /mesh/storage/browse?path=… which uses BaseFile so local
+  // dirs and S3 prefixes walk uniformly. Renders inside its own <details>
+  // so the card stays compact until you want to peek.
+  matrixHtml += `
+    <details open style="margin-top:0.5rem;">
+      <summary><b>Browse</b> <small class="meta">walk the storage tree</small></summary>
+      <div id="storage-browser" style="margin-top:0.4rem;">
+        <div id="storage-crumbs" class="meta"
+             style="font-family:ui-monospace,monospace;font-size:0.8rem;margin-bottom:0.3rem;"></div>
+        <div id="storage-entries">loading…</div>
+      </div>
+    </details>`;
+  matrixEl.innerHTML = matrixHtml;
+
+  // Kick off the browser at the default root (server picks the S3 bucket
+  // when configured, else HITORRO_DATASETS_HOME).
+  browseStorage('');
+}
+
+async function browseStorage(path) {
+  const crumbsEl  = $('#storage-crumbs');
+  const entriesEl = $('#storage-entries');
+  if (!crumbsEl || !entriesEl) return;
+  entriesEl.innerHTML = '<small class="meta">loading…</small>';
+  try {
+    const q = path ? '?path=' + encodeURIComponent(path) : '';
+    const r = await api('/mesh/storage/browse' + q);
+    const resolved = r.resolved || '(root)';
+
+    // Breadcrumb — trim the scheme prefix for readability, split remainder.
+    let display = resolved;
+    ['s3://', 'file:', 'http://', 'https://'].forEach(prefix => {
+      if (display.startsWith(prefix)) display = display.substring(prefix.length);
+    });
+    const scheme = resolved.substring(0, resolved.length - display.length);
+    const parts = display.split('/').filter(Boolean);
+    const crumbs = [`<a href="#" data-path="">${esc(scheme || '/')}</a>`];
+    let acc = scheme;
+    parts.forEach((p, i) => {
+      acc += p + (i < parts.length - 1 || display.endsWith('/') ? '/' : '');
+      crumbs.push(` / <a href="#" data-path="${esc(acc)}">${esc(p)}</a>`);
+    });
+    crumbsEl.innerHTML = crumbs.join('')
+      + (r.parent
+          ? ` &nbsp;<a href="#" data-path="${esc(r.parent)}" style="float:right;">↑ up</a>`
+          : '');
+    crumbsEl.querySelectorAll('a[data-path]').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        browseStorage(a.dataset.path);
+      }));
+
+    const entries = r.entries || [];
+    if (!entries.length) {
+      entriesEl.innerHTML = '<small class="meta">empty</small>';
+      return;
+    }
+    entriesEl.innerHTML = `<table style="width:100%;font-size:0.85rem;">
+      <tbody>
+      ${entries.map(e => `
+        <tr>
+          <td style="padding:0.15rem 0.4rem;">
+            ${e.isDir
+              ? `<a href="#" data-path="${esc(joinPath(resolved, e.name))}">📁 ${esc(e.name)}/</a>`
+              : `📄 ${esc(e.name)}`}
+          </td>
+          <td style="padding:0.15rem 0.4rem;text-align:right;color:#888;">
+            ${e.isDir ? '' : humanBytes(e.size)}
+          </td>
+        </tr>`).join('')}
+      </tbody></table>`;
+    entriesEl.querySelectorAll('a[data-path]').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        browseStorage(a.dataset.path);
+      }));
+  } catch (e) {
+    entriesEl.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
+  }
+}
+
+/** Join a base URI with a child name — handles s3:// and file:/ uniformly. */
+function joinPath(base, name) {
+  return base.endsWith('/') ? base + name + '/' : base + '/' + name + '/';
 }
 
 /** kB / MB / GB with one decimal. */

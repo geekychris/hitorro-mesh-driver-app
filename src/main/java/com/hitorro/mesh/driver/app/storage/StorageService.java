@@ -137,6 +137,107 @@ public class StorageService {
         }
     }
 
+    /**
+     * List entries under a storage path. Uses {@link BaseFileSystem}
+     * uniformly so local dirs and S3 prefixes browse the same way.
+     *
+     * <p>The {@code path} arg can be:</p>
+     * <ul>
+     *   <li>Empty — defaults to the datasets root (S3 bucket + datasets/
+     *       prefix when S3 is configured, else {@code HITORRO_DATASETS_HOME}).</li>
+     *   <li>A bare relative path (e.g. {@code datasets/iso-currencies/}) —
+     *       resolved against the same default root.</li>
+     *   <li>An explicit URI ({@code s3://…}, {@code file:…}) — used as-is.</li>
+     * </ul>
+     *
+     * <p>Response shape:
+     * <pre>
+     * {
+     *   "path":     "s3://hitorro/datasets/iso-currencies/",
+     *   "resolved": "s3://hitorro/datasets/iso-currencies/",
+     *   "parent":   "s3://hitorro/datasets/",
+     *   "entries":  [
+     *     { "name": "data",     "isDir": true,  "size": 0 },
+     *     { "name": "types",    "isDir": true,  "size": 0 },
+     *     { "name": "manifest.yaml", "isDir": false, "size": 1287 }
+     *   ]
+     * }
+     * </pre></p>
+     */
+    public Map<String, Object> browse(String path) throws Exception {
+        String resolved = resolveBrowsePath(path);
+        BaseFile bf = BaseFileSystem.getBaseFileFromPath(resolved);
+        if (bf == null || !bf.exists()) {
+            throw new IllegalArgumentException("path not found: " + resolved);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("path", path == null ? "" : path);
+        out.put("resolved", resolved);
+        out.put("parent", parentOf(resolved));
+
+        List<Map<String, Object>> entries = new ArrayList<>();
+        if (bf.isDir()) {
+            BaseFile[] kids = bf.listFiles();
+            if (kids != null) {
+                java.util.Arrays.sort(kids, (a, b) -> {
+                    // dirs first, then alpha
+                    if (a.isDir() != b.isDir()) return a.isDir() ? -1 : 1;
+                    return a.getName().compareTo(b.getName());
+                });
+                for (BaseFile k : kids) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("name", k.getName());
+                    row.put("isDir", k.isDir());
+                    row.put("size", k.isDir() ? 0L : safeLength(k));
+                    entries.add(row);
+                }
+            }
+        } else {
+            // Single-file browse: just report itself.
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", bf.getName());
+            row.put("isDir", false);
+            row.put("size", safeLength(bf));
+            entries.add(row);
+        }
+        out.put("entries", entries);
+        return out;
+    }
+
+    private String resolveBrowsePath(String path) {
+        String p = path == null ? "" : path.trim();
+        // Already an explicit URI — use as-is.
+        if (p.startsWith("s3://") || p.startsWith("file:") || p.startsWith("http://") || p.startsWith("https://")) {
+            return p;
+        }
+        // Empty or relative — resolve against the default root.
+        MinioProtocolAdapter minio = s3.getIfAvailable();
+        if (minio != null) {
+            String base = "s3://" + minio.getBucket() + "/";
+            if (p.isEmpty()) return base + "datasets/";
+            return base + (p.startsWith("/") ? p.substring(1) : p);
+        }
+        if (p.isEmpty()) return "file:" + datasetsHome;
+        if (p.startsWith("/")) return "file:" + p;
+        return "file:" + datasetsHome + "/" + p;
+    }
+
+    private static String parentOf(String uri) {
+        int scheme = uri.indexOf("://");
+        int start = scheme < 0 ? uri.indexOf(':') + 1 : scheme + 3;
+        String prefix = uri.substring(0, start);
+        String rest = uri.substring(start);
+        // Trim trailing slash before splitting so /a/b/ → parent is /a/
+        String trimmed = rest.endsWith("/") ? rest.substring(0, rest.length() - 1) : rest;
+        int slash = trimmed.lastIndexOf('/');
+        if (slash <= 0) return null;
+        return prefix + trimmed.substring(0, slash + 1);
+    }
+
+    private static long safeLength(BaseFile bf) {
+        try { return bf.length(); } catch (Exception e) { return -1L; }
+    }
+
     /** Walk a local directory, sum bytes + file count. Best-effort. */
     private static long[] walkSize(Path root) {
         long[] r = new long[2]; // {bytes, files}
