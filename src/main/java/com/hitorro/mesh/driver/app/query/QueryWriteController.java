@@ -108,6 +108,73 @@ public class QueryWriteController {
      * knows what THIS driver instance registered, but agent journals
      * survive across driver bounces so entries can accumulate.
      */
+    /**
+     * Dry-run of {@link #reconcileFromInventory} — fires the probe and
+     * returns the set of runtime entries that WOULD be unregistered
+     * without actually publishing any unregister. Powers a two-step UI
+     * where the operator can pick which items to reconcile.
+     */
+    @GetMapping("/registered/reconcile/preview")
+    public Map<String, Object> reconcilePreview() {
+        InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        List<Map<String, Object>> targets = new java.util.ArrayList<>();
+        // Map (name, partitionKey) → agents holding it, so the UI can
+        // show "held by: agent-us, agent-eu" per row.
+        java.util.Map<String, java.util.List<String>> holders = new java.util.LinkedHashMap<>();
+        for (com.hitorro.mesh.TableInventoryReply rep : probe.replies()) {
+            for (com.hitorro.mesh.TableInventoryReply.Entry e : rep.tables()) {
+                if (!"runtime".equals(e.source())) continue;
+                String key = e.name() + "@" + (e.partitionKey() == null ? "" : e.partitionKey());
+                holders.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(rep.agentId());
+                if (seen.add(key)) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", e.name());
+                    m.put("partitionKey", e.partitionKey());
+                    m.put("trackedByDriver", runtimeTracker.snapshot().stream()
+                            .anyMatch(t -> t.name().equals(e.name())));
+                    targets.add(m);
+                }
+            }
+        }
+        for (Map<String, Object> t : targets) {
+            String key = t.get("name") + "@" + (t.get("partitionKey") == null ? "" : t.get("partitionKey"));
+            t.put("heldBy", holders.get(key));
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("agentsAsked", probe.agentsAsked());
+        out.put("agentsReplied", probe.replies().size());
+        out.put("candidates", targets);
+        out.put("count", targets.size());
+        return out;
+    }
+
+    /** Request body for selective reconcile — subset of the preview. */
+    public static final class ReconcileSelectRequest {
+        public List<Map<String, String>> targets;   // each {name, partitionKey}
+    }
+
+    /** Apply reconcile to just the caller-selected subset. Mirror of
+     *  reconcileFromInventory but scoped by the UI's checkbox selection. */
+    @org.springframework.web.bind.annotation.PostMapping("/registered/reconcile/apply")
+    public Map<String, Object> reconcileApply(@RequestBody ReconcileSelectRequest req) {
+        List<Map<String, String>> targets = req.targets == null ? List.of() : req.targets;
+        for (Map<String, String> t : targets) {
+            String name = t.get("name");
+            String pk = t.get("partitionKey");
+            if (name == null || name.isBlank()) continue;
+            driver.tables().remove(name);
+            driver.tables().unregisterBroadcast(name);
+            driver.publishUnregisterTable(new com.hitorro.mesh.UnregisterTableMessage(name, pk));
+            runtimeTracker.forget(name);
+        }
+        log.info("runtime-tables: selectively reconciled {} entries", targets.size());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("cleared", targets);
+        out.put("count", targets.size());
+        return out;
+    }
+
     @org.springframework.web.bind.annotation.PostMapping("/registered/reconcile")
     public Map<String, Object> reconcileFromInventory() {
         InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));
@@ -459,6 +526,31 @@ public class QueryWriteController {
         String typeJson = typeJsonOverride != null && !typeJsonOverride.isBlank()
                 ? typeJsonOverride
                 : induceTypeJson(name, firstRow);
+
+        // Fail-fast URI validity check — verify the driver can see the
+        // file before we announce it to every agent. Avoids a silent
+        // partial-install storm where agents all fail with the same
+        // "no BaseFile adapter for …" or "path not found" error. We
+        // check on the driver's classpath; if the URI works for the
+        // driver's BaseFile adapters it almost certainly works for the
+        // agents too (they carry the same s3/hdfs bits).
+        try {
+            com.hitorro.util.basefile.fs.BaseFile bf =
+                com.hitorro.util.basefile.fs.BaseFileSystem.getBaseFileFromPath(resolvedUri);
+            if (bf == null) {
+                throw new IllegalArgumentException(
+                        "cannot register: no BaseFile adapter for " + resolvedUri);
+            }
+            if (!bf.exists()) {
+                throw new IllegalArgumentException(
+                        "cannot register: file not found at " + resolvedUri);
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "cannot register: BaseFile check for " + resolvedUri + " failed: " + e.getMessage());
+        }
 
         // Driver-side registration — TWO forms (mirrors what MeshRegistrar
         // does for datasets):

@@ -1156,6 +1156,22 @@
         <div id="runtime-table-body" style="max-height:70vh;overflow:auto;font-size:0.85rem;"></div>
       </article>
     </dialog>
+
+    <!-- Reconcile preview — pick-what-to-clear -->
+    <dialog id="reconcile-dialog" style="width:min(700px,95vw); max-height:85vh;">
+      <article>
+        <header style="display:flex;align-items:center;gap:0.5rem;">
+          <span><b>Reconcile runtime tables</b></span>
+          <span style="flex:1"></span>
+          <button id="reconcile-close" class="secondary outline" style="margin:0;padding:0.15rem 0.9rem;">Cancel</button>
+        </header>
+        <div id="reconcile-body" style="max-height:60vh;overflow:auto;font-size:0.85rem;"></div>
+        <footer style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;">
+          <span id="reconcile-summary" class="meta" style="flex:1;align-self:center;"></span>
+          <button id="reconcile-apply" class="secondary" style="padding:0.15rem 0.9rem;color:var(--danger);">🗑 Apply selected</button>
+        </footer>
+      </article>
+    </dialog>
   </section>
 
   <!-- ================== JOBS ================== -->

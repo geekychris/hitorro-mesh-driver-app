@@ -5,6 +5,7 @@ package com.hitorro.mesh.driver.app;
 
 import com.hitorro.mesh.driver.MeshDriver;
 import io.micrometer.core.instrument.Counter;
+import com.hitorro.mesh.driver.app.query.RuntimeTableTracker;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
@@ -43,7 +44,8 @@ public class MeshMetrics {
     private final Counter queriesErr;
     private final Counter rowsReturned;
 
-    public MeshMetrics(MeterRegistry registry, MeshDriver driver) {
+    public MeshMetrics(MeterRegistry registry, MeshDriver driver,
+                       com.hitorro.mesh.driver.app.query.RuntimeTableTracker runtimeTracker) {
         this.queriesOk = Counter.builder("mesh.queries")
                 .tag("outcome", "ok")
                 .description("distributed queries that returned a result")
@@ -76,6 +78,11 @@ public class MeshMetrics {
         // dispatcher tracks the total; Micrometer reads on scrape).
         registry.gauge("mesh.backpressure.drops.total", driver,
                 d -> (double) d.dispatcher().backpressureDrops());
+        // Runtime-tables tracker size — how many tables this driver
+        // registered via the write panel. Alert on unexpected growth
+        // (e.g. an integration accidentally registering per-request).
+        registry.gauge("mesh.runtime.tables.total", runtimeTracker,
+                RuntimeTableTracker::size);
     }
 
     Timer submitTimerOk()   { return submitTimerOk; }

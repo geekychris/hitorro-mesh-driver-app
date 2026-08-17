@@ -2208,19 +2208,97 @@ async function unregisterRuntimeTable(name) {
 }
 
 async function reconcileRuntimeTables() {
-  if (!confirm('Probe agents for runtime tables and unregister ALL of them mesh-wide? This drops orphans from earlier driver sessions. Cannot be undone.')) return;
+  const dlg = $('#reconcile-dialog');
+  const body = $('#reconcile-body');
+  const summary = $('#reconcile-summary');
+  if (!dlg || !body) return;
+  body.innerHTML = '<small class="meta">probing agents…</small>';
+  summary.textContent = '';
+  dlg.showModal();
   try {
-    const r = await api('/mesh/queries/registered/reconcile', {method: 'POST'});
+    const r = await api('/mesh/queries/registered/reconcile/preview');
+    if (!r.count) {
+      body.innerHTML = '<em>no runtime entries found on any agent — nothing to reconcile.</em>';
+      summary.textContent = `${r.agentsReplied}/${r.agentsAsked} agents replied`;
+      return;
+    }
+    body.innerHTML = `
+      <p class="meta" style="margin:0 0 0.4rem;">
+        ${r.count} distinct runtime entries across ${r.agentsReplied}/${r.agentsAsked} agent(s).
+        Untracked = orphan from a previous driver session. Pick which to unregister:
+      </p>
+      <table style="width:100%;font-size:0.85rem;">
+        <thead><tr>
+          <th style="width:1.5rem;padding:0.15rem 0.4rem;"><input type="checkbox" id="reconcile-check-all" checked title="Select all" style="margin:0;"></th>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">table</th>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">pk</th>
+          <th style="text-align:left;padding:0.15rem 0.4rem;">held by</th>
+          <th style="text-align:center;padding:0.15rem 0.4rem;">tracked</th>
+        </tr></thead>
+        <tbody>
+          ${r.candidates.map((c, i) => `
+            <tr>
+              <td style="padding:0.15rem 0.4rem;">
+                <input type="checkbox" class="reconcile-check" checked
+                       data-name="${esc(c.name)}"
+                       data-pk="${esc(c.partitionKey ?? '')}"
+                       style="margin:0;">
+              </td>
+              <td style="padding:0.15rem 0.4rem;"><code>${esc(c.name)}</code></td>
+              <td style="padding:0.15rem 0.4rem;">${esc(c.partitionKey ?? 'null')}</td>
+              <td style="padding:0.15rem 0.4rem;font-size:0.78rem;color:#666;">${(c.heldBy || []).map(a => `<code>${esc(a)}</code>`).join(', ')}</td>
+              <td style="padding:0.15rem 0.4rem;text-align:center;">${c.trackedByDriver ? '✓' : '⚠ orphan'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+    // Wire select-all + count updater.
+    const updateSelectedCount = () => {
+      const n = document.querySelectorAll('.reconcile-check:checked').length;
+      summary.textContent = `${n} of ${r.count} selected`;
+    };
+    document.querySelectorAll('.reconcile-check').forEach(cb =>
+      cb.addEventListener('change', updateSelectedCount));
+    $('#reconcile-check-all').addEventListener('change', ev => {
+      document.querySelectorAll('.reconcile-check').forEach(cb => cb.checked = ev.target.checked);
+      updateSelectedCount();
+    });
+    updateSelectedCount();
+  } catch (e) {
+    body.innerHTML = `<small style="color:var(--danger)">preview failed: ${esc(e.message || e)}</small>`;
+  }
+}
+
+async function applyReconcile() {
+  const picks = [...document.querySelectorAll('.reconcile-check:checked')].map(cb => ({
+    name: cb.dataset.name,
+    partitionKey: cb.dataset.pk || null,
+  }));
+  if (!picks.length) {
+    alert('nothing selected');
+    return;
+  }
+  if (!confirm(`Unregister ${picks.length} runtime entries mesh-wide? This cannot be undone.`)) return;
+  const btn = $('#reconcile-apply');
+  btn.disabled = true;
+  try {
+    const r = await api('/mesh/queries/registered/reconcile/apply', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({targets: picks}),
+    });
+    $('#reconcile-dialog').close();
     refreshRuntimeTablesPanel();
     refreshInventoryMatrix();
     const st = $('#pg-write-status');
     if (st) {
       st.style.color = 'var(--success)';
-      st.innerHTML = `🧹 reconciled ${r.count} runtime table(s) across ${r.agentsReplied}/${r.agentsAsked} agent(s)`;
+      st.innerHTML = `🧹 reconciled ${r.count} runtime entries`;
     }
-    alert(`Reconciled ${r.count} runtime table(s) across ${r.agentsReplied}/${r.agentsAsked} agent(s).`);
   } catch (e) {
-    alert('reconcile failed: ' + (e.message || e));
+    alert('apply failed: ' + (e.message || e));
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -3359,10 +3437,12 @@ function wireFleetHandlers() {
     refresh._wired = true;
     refresh.addEventListener('click', loadFleetServices);
   }
-  ['fleet-log-close', 'fleet-manifest-close', 'runtime-table-close'].forEach(id => {
+  ['fleet-log-close', 'fleet-manifest-close', 'runtime-table-close', 'reconcile-close'].forEach(id => {
     const b = $('#' + id);
     if (b && !b._wired) { b._wired = true; b.addEventListener('click', () => b.closest('dialog').close()); }
   });
+  const applyBtn = $('#reconcile-apply');
+  if (applyBtn && !applyBtn._wired) { applyBtn._wired = true; applyBtn.addEventListener('click', applyReconcile); }
   const copy = $('#fleet-manifest-copy');
   if (copy && !copy._wired) {
     copy._wired = true;
