@@ -96,7 +96,14 @@ public class QueryWriteController {
         public String name;
         public String uri;
         public String format = "ndjson";
-        public String typeJson;   // optional — omit to induce from sample rows
+        public String typeJson;         // optional — omit to induce from sample rows
+        /** Broadcast (default) vs distributed. Broadcast → dual-install
+         *  (pk=null + pk="broadcast"); distributed → single install under
+         *  the given partitionKey with per-partition capability routing. */
+        public boolean broadcast = true;
+        /** Required when broadcast=false. Convention: "all" means every
+         *  jvssql agent installs this partition. */
+        public String partitionKey;
     }
 
     /** Request body for {@link #registerStreaming}. */
@@ -198,29 +205,36 @@ public class QueryWriteController {
             typeJson = induceTypeJson(req.name, sample);
         }
 
-        // Same dual-registration pattern as write-with-register.
+        // Broadcast → dual register (registerBroadcast + partition="broadcast").
+        // Distributed → single register with the caller-supplied partition-key,
+        // capability is [jvssql] (any agent that has the runtime install can serve).
         Type type = new Type();
         type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(typeJson));
-        driver.tables().registerBroadcast(req.name);
+        String pk = req.broadcast ? "broadcast" : req.partitionKey;
+        if (!req.broadcast && (pk == null || pk.isBlank())) {
+            throw new IllegalArgumentException("partitionKey is required when broadcast=false");
+        }
+        if (req.broadcast) driver.tables().registerBroadcast(req.name);
         DistributedTable.Partition part = new DistributedTable.Partition(
-                "broadcast", java.util.Set.of("jvssql"), -1L);
+                pk, java.util.Set.of("jvssql"), -1L);
         driver.tables().register(new RegisteredWriteTable(
                 req.name, type, java.util.List.of(part)));
 
         RegisterTableMessage msg = new RegisterTableMessage(
-                req.name, typeJson, req.uri, format, true, null);
+                req.name, typeJson, req.uri, format, req.broadcast, req.partitionKey);
         driver.publishRegisterTable(msg);
         int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
         runtimeTracker.record(msg, agentCount);
 
-        log.info("registered existing file as table {} ({}, uri={}, agents={})",
-                req.name, format, req.uri, agentCount);
+        log.info("registered existing file as table {} ({}, broadcast={}, pk={}, uri={}, agents={})",
+                req.name, format, req.broadcast, req.partitionKey, req.uri, agentCount);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tableName", req.name);
         out.put("typeJson", typeJson);
         out.put("uri", req.uri);
         out.put("format", format);
-        out.put("broadcast", true);
+        out.put("broadcast", req.broadcast);
+        out.put("partitionKey", req.partitionKey);
         out.put("agentsNotified", agentCount);
         return out;
     }
