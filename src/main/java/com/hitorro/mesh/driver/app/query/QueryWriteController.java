@@ -98,6 +98,20 @@ public class QueryWriteController {
      * now?" — as opposed to /mesh/queries/registered which shows
      * "who did we tell about it".
      */
+    /**
+     * Full inventory probe — every agent's complete table set (boot +
+     * runtime). Powers the Cluster tab's inventory matrix.
+     */
+    @GetMapping("/inventory")
+    public Map<String, Object> inventory() {
+        InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("agentsAsked", probe.agentsAsked());
+        out.put("agentsReplied", probe.replies().size());
+        out.put("replies", probe.replies());
+        return out;
+    }
+
     @GetMapping("/registered/{name}/agents")
     public Map<String, Object> registeredAgents(@org.springframework.web.bind.annotation.PathVariable("name") String name) {
         InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));

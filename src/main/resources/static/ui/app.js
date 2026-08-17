@@ -955,8 +955,86 @@ async function refreshCluster() {
     if (storage) renderStorage(storage);
     $('#health-json').textContent = fmtJson(health);
     $('#cluster-json').textContent = fmtJson(cluster);
+    // Inventory matrix is a separate fetch — the probe takes ~1.5s
+    // (NATS fan-out with deadline), so it doesn't block the rest of
+    // the cluster panel from rendering.
+    refreshInventoryMatrix();
   } catch (e) {
     $('#cluster-friendly').innerHTML = `<div class="cluster-status-callout err"><p class="title">Error loading cluster</p><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+/** Fetch + render the inventory matrix — tables × agents from a live
+ *  NATS probe. Rows are distinct table names; columns are agents. Each
+ *  cell shows a ✓ tagged with the entry's source (boot / runtime) plus
+ *  the partitionKey when non-null. Empty cells mean "agent replied but
+ *  didn't have this table". */
+async function refreshInventoryMatrix() {
+  const badge = $('#inventory-badge');
+  const body = $('#inventory-body');
+  if (!body) return;
+  body.innerHTML = '<small class="meta">probing agents…</small>';
+  try {
+    const inv = await api('/mesh/queries/inventory');
+    const replies = inv.replies || [];
+    if (badge) {
+      badge.textContent = `${inv.agentsReplied}/${inv.agentsAsked}`;
+      badge.className = 'badge ' + (inv.agentsReplied === inv.agentsAsked ? 'success' : 'warning');
+    }
+    if (!replies.length) {
+      body.innerHTML = '<small class="meta">no agent responded</small>';
+      return;
+    }
+    // Build the set of (agentId, tableName) with the source tag.
+    const agents = replies.map(r => r.agentId).sort();
+    const cells = new Map();  // key = agentId|tableName|pk → source
+    const tableNames = new Set();
+    for (const rep of replies) {
+      for (const t of (rep.tables || [])) {
+        const pk = t.partitionKey ?? '';
+        cells.set(rep.agentId + '|' + t.name + '|' + pk, {source: t.source, pk});
+        tableNames.add(t.name);
+      }
+    }
+    const sortedTables = [...tableNames].sort();
+    body.innerHTML = `
+      <div class="scroll" style="max-height:26rem;overflow:auto;">
+      <table style="width:100%;font-size:0.78rem;border-collapse:collapse;">
+        <thead><tr>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;">table</th>
+          <th style="text-align:center;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;">source</th>
+          ${agents.map(a => `<th style="text-align:center;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;"><code>${esc(a)}</code></th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${sortedTables.map(name => {
+            // Dedup by (name, pk) across agents — one row per partition key.
+            const pks = new Set();
+            for (const a of agents) {
+              for (const [k, v] of cells) {
+                const [ag, nm, p] = k.split('|');
+                if (ag === a && nm === name) pks.add(p);
+              }
+            }
+            return [...pks].map(pk => `
+              <tr>
+                <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;"><code>${esc(name)}</code>${pk ? ` <span class="meta">${esc(pk)}</span>` : ''}</td>
+                <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;text-align:center;color:#888;">
+                  ${[...agents].map(a => cells.get(a + '|' + name + '|' + pk)?.source).filter(Boolean)[0] || ''}
+                </td>
+                ${agents.map(a => {
+                  const cell = cells.get(a + '|' + name + '|' + pk);
+                  return `<td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;text-align:center;">${cell ? (cell.source === 'runtime' ? '⚡' : '✓') : ''}</td>`;
+                }).join('')}
+              </tr>`).join('');
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <p class="meta" style="margin:0.4rem 0 0;font-size:0.75rem;">
+        ✓ = boot-time (from AgentProperties) · ⚡ = runtime (RegisterTableMessage). Partition key shown after table name when non-null.
+      </p>`;
+  } catch (e) {
+    body.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
   }
 }
 
@@ -2634,6 +2712,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pg-runtime-clear-all')?.addEventListener('click', ev => {
     ev.preventDefault();
     clearAllRuntimeTables();
+  });
+  // Auto-refresh runtime tables panel when the tab regains focus —
+  // catches unregisters/registers done from another tab or curl.
+  window.addEventListener('focus', () => {
+    if (document.querySelector('#playground.tab-panel.active')) {
+      refreshRuntimeTablesPanel();
+    }
+  });
+  // Inventory matrix refresh button.
+  $('#inventory-refresh')?.addEventListener('click', ev => {
+    ev.preventDefault();
+    refreshInventoryMatrix();
   });
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
