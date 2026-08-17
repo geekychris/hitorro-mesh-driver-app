@@ -6,14 +6,18 @@ package com.hitorro.mesh.driver.app.query;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.mesh.driver.QueryDispatcher;
+import com.hitorro.util.basefile.fs.s3.MinioProtocolAdapter;
 import com.hitorro.util.core.iterator.sinks.NdjsonFileSink;
 import com.hitorro.util.core.iterator.sinks.Sink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
@@ -51,9 +55,54 @@ public class QueryWriteController {
     private static final Logger log = LoggerFactory.getLogger(QueryWriteController.class);
 
     private final MeshDriver driver;
+    private final ObjectProvider<MinioProtocolAdapter> s3;
 
-    public QueryWriteController(MeshDriver driver) {
+    public QueryWriteController(MeshDriver driver,
+                                ObjectProvider<MinioProtocolAdapter> s3) {
         this.driver = driver;
+        this.s3 = s3;
+    }
+
+    /**
+     * Where a bare name (no scheme) writes to:
+     * <ul>
+     *   <li>S3 configured → {@code s3://<bucket>/queries/<name>.<format>}</li>
+     *   <li>otherwise     → {@code file:./queries/<name>.<format>} (relative
+     *       to driver working directory)</li>
+     * </ul>
+     * Explicit URIs ({@code file:/…}, {@code s3://…}, {@code hdfs://…})
+     * pass through unchanged.
+     */
+    private String resolveWritePath(String userPath, String format) {
+        String p = userPath.trim();
+        if (p.startsWith("s3://") || p.startsWith("file:")
+                || p.startsWith("hdfs://") || p.startsWith("http://") || p.startsWith("https://")) {
+            return p;
+        }
+        String ext = format.equals("parquet") ? ".parquet" : ".ndjson";
+        // Only append the format extension if the user didn't include one.
+        String name = p.endsWith(".ndjson") || p.endsWith(".parquet")
+                || p.endsWith(".ndjson.gz") || p.endsWith(".ndjson.bz2") ? p : p + ext;
+        MinioProtocolAdapter minio = s3.getIfAvailable();
+        if (minio != null) {
+            return "s3://" + minio.getBucket() + "/queries/" + name;
+        }
+        // file: URIs must be absolute (java.net.URI + Hadoop Path both reject
+        // "file:./…"). Resolve against the driver's working dir so the user's
+        // bare name lands somewhere predictable and Hadoop-writable.
+        java.nio.file.Path abs = java.nio.file.Paths.get("queries", name).toAbsolutePath();
+        return "file:" + abs;
+    }
+
+    /**
+     * Pre-flight resolver so the UI can show where a bare name will land
+     * before the user clicks Write. No SQL executed. Returns
+     * {@code {resolved: "s3://…" or "file:./…"}}.
+     */
+    @GetMapping("/write/resolve")
+    public Map<String, Object> resolve(@RequestParam(name = "path", defaultValue = "example") String path,
+                                       @RequestParam(name = "format", defaultValue = "ndjson") String format) {
+        return Map.of("resolved", resolveWritePath(path, format));
     }
 
     public static final class WriteRequest {
@@ -72,8 +121,9 @@ public class QueryWriteController {
             requireNonBlank("format", req.format);
             requireNonBlank("path", req.path);
             String format = req.format.trim().toLowerCase();
+            String resolved = resolveWritePath(req.path, format);
 
-            Sink<JsonNode> sink = openSink(format, req.path);
+            Sink<JsonNode> sink = openSink(format, resolved);
             long rows;
             String queryId;
             try (QueryDispatcher.QueryHandle h = driver.dispatcher().submit(
@@ -90,6 +140,7 @@ public class QueryWriteController {
             out.put("queryId", queryId);
             out.put("format", format);
             out.put("path", req.path);
+            out.put("resolved", resolved);
             out.put("rowsWritten", rows);
             out.put("elapsedMs", (System.nanoTime() - tStart) / 1_000_000);
             out.put("success", true);

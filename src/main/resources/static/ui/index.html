@@ -451,17 +451,15 @@
             <button id="pg-clear" class="secondary outline">Clear</button>
           </div>
 
-          <!-- Optional: execute query and write results to a storage URI
-               (NDJson or Parquet) instead of returning them inline. Routes
-               through /mesh/queries/write which opens the appropriate Sink;
-               file:/… writes to disk, s3://bucket/key writes to MinIO / S3
-               when the storage adapter is configured. -->
-          <details style="margin-top: 0.5rem;">
-            <summary style="cursor: pointer;">
-              <b>Write results to storage</b>
-              <span class="meta">— export to file (NDJson / Parquet)</span>
-            </summary>
-            <div class="row" style="align-items: center; gap: 0.5rem; margin-top: 0.4rem;">
+          <!-- Execute query and write results to storage instead of returning
+               them inline. Bare names like "big-cities" resolve to a default
+               location (s3://<bucket>/queries/<name>.<format> when S3 is
+               configured, else file:./queries/<name>.<format>). Explicit
+               URIs (file:/…, s3://…) are used as-is. -->
+          <fieldset style="margin: 0.5rem 0 0; padding: 0.6rem 0.75rem; border: 1px solid #d5d5d5; border-radius: 4px;">
+            <legend style="padding: 0 0.4rem;"><b>Write results to storage</b>
+              <span class="meta">— export to file</span></legend>
+            <div class="row" style="align-items: center; gap: 0.5rem; margin: 0;">
               <label style="margin: 0;">Format
                 <select id="pg-write-format" style="margin: 0 0.4rem;">
                   <option value="ndjson">ndjson</option>
@@ -469,13 +467,17 @@
                 </select>
               </label>
               <input type="text" id="pg-write-path"
-                     placeholder="s3://hitorro/exports/foo.ndjson.gz   (or file:./out.ndjson / file:./out.parquet)"
+                     placeholder="table-name       (or file:./out.ndjson / s3://bucket/key.parquet)"
                      style="flex: 1; margin: 0;"
-                     title="Storage URI. s3:// requires HITORRO_STORAGE_S3_ENDPOINT on the driver.">
+                     title="Bare name → default location. Explicit URIs (file:/… / s3://…) used as-is.">
               <button id="pg-write-btn" class="secondary" style="margin: 0;">↓ Write</button>
             </div>
+            <p class="meta" style="margin: 0.4rem 0 0; font-size: 0.8rem;">
+              Where a bare name writes to:
+              <span id="pg-write-resolved-hint">…</span>
+            </p>
             <p id="pg-write-status" class="meta" style="margin: 0.3rem 0 0;"></p>
-          </details>
+          </fieldset>
           <!-- Populated when a semantic:true request returned a rewrittenSql
                distinct from the input. Purely informational; the query
                already ran against this rewritten form. -->

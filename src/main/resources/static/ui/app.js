@@ -1544,9 +1544,37 @@ let lastResult = null;
 let tableSort = { col: null, dir: 1 };   // 1 = asc, -1 = desc
 
 /**
- * Execute the Playground SQL and write results to a storage URI as NDJson
- * or Parquet — hits POST /mesh/queries/write, which routes via BaseFile
- * so file:/… lands on disk and s3://… lands in MinIO (when configured).
+ * Live-preview where a bare-name write will land. Called as user types
+ * in the path input + toggles the format dropdown; hits
+ * /mesh/queries/write/resolve which knows the S3 bucket if configured.
+ */
+async function updateWriteResolvedHint() {
+  const hintEl = $('#pg-write-resolved-hint');
+  if (!hintEl) return;
+  const path   = ($('#pg-write-path').value || '').trim();
+  const format = $('#pg-write-format').value;
+  if (!path) {
+    hintEl.innerHTML = '<i>type a name or URI above</i>';
+    return;
+  }
+  // Explicit URIs pass through — no server round-trip needed.
+  if (/^(file:|s3:\/\/|hdfs:\/\/|https?:\/\/)/.test(path)) {
+    hintEl.innerHTML = `<code>${esc(path)}</code> <span class="meta">(explicit URI)</span>`;
+    return;
+  }
+  try {
+    const r = await api('/mesh/queries/write/resolve?path=' + encodeURIComponent(path)
+                        + '&format=' + encodeURIComponent(format));
+    hintEl.innerHTML = `<code>${esc(r.resolved)}</code>`;
+  } catch (e) {
+    hintEl.textContent = '(resolver unavailable)';
+  }
+}
+
+/**
+ * Execute the Playground SQL and write results to storage as NDJson or
+ * Parquet — hits POST /mesh/queries/write. Bare names ("big-cities")
+ * resolve to a default location; explicit URIs pass through.
  */
 async function writePlaygroundQuery() {
   const sql       = getSql().trim();
@@ -1555,8 +1583,9 @@ async function writePlaygroundQuery() {
   const timeoutMs = Math.max(+$('#pg-timeout').value || 5000, 30000); // writes get ≥ 30s
   const statusEl  = $('#pg-write-status');
   if (!sql)  { statusEl.textContent = 'no SQL — nothing to write'; return; }
-  if (!path) { statusEl.textContent = 'destination path is required (e.g. file:./out.parquet or s3://bucket/key)'; return; }
+  if (!path) { statusEl.textContent = 'destination is required (name, or file:/… / s3://…)'; return; }
 
+  statusEl.style.color = '';
   statusEl.textContent = `writing ${format} → ${path} …`;
   const t0 = performance.now();
   try {
@@ -1568,8 +1597,10 @@ async function writePlaygroundQuery() {
     const dtMs = Math.round(performance.now() - t0);
     if (r.success) {
       statusEl.style.color = 'var(--success)';
+      // Show where it actually landed — critical when the user typed a
+      // bare name and the resolver picked the destination.
       statusEl.innerHTML = `✅ wrote <b>${r.rowsWritten.toLocaleString()}</b> rows `
-        + `→ <code>${esc(r.path)}</code> in ${dtMs}ms`;
+        + `→ <code>${esc(r.resolved || r.path)}</code> in ${dtMs}ms`;
     } else {
       statusEl.style.color = 'var(--danger)';
       statusEl.textContent = 'write failed: ' + (r.error || 'unknown error');
@@ -2102,6 +2133,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#pg-run').addEventListener('click', runPlaygroundQuery);
   $('#pg-write-btn')?.addEventListener('click', writePlaygroundQuery);
+  // Live-preview the resolved path as user types + changes format
+  $('#pg-write-path')?.addEventListener('input',  updateWriteResolvedHint);
+  $('#pg-write-format')?.addEventListener('change', updateWriteResolvedHint);
+  updateWriteResolvedHint();
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
     $('#pg-result').hidden = true;
