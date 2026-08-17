@@ -1490,8 +1490,12 @@ function streamSync(datasetId) {
       const storage = await api('/mesh/storage');
       renderStorage(storage);
       if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(label)}</span>`;
+      // Only notify if the user probably tabbed away — sync can take
+      // minutes and they'd want a signal.
+      if (document.hidden) notify('MinIO sync complete', `Synced ${label}`);
     } else {
       if (msg) msg.innerHTML = `<span style="color:var(--danger)">sync ${esc(label)} exited ${rc} — see driver logs</span>`;
+      if (document.hidden) notify('MinIO sync failed', `${label} exited ${rc}`);
     }
   });
   es.addEventListener('error', ev => {
@@ -2044,7 +2048,11 @@ async function refreshRuntimeTablesPanel() {
                 </a>
               </td>
               <td style="padding:0.15rem 0.4rem;">${esc(r.format)}</td>
-              <td style="padding:0.15rem 0.4rem;font-family:ui-monospace,monospace;font-size:0.78rem;color:#555;">${esc(r.uri)}</td>
+              <td style="padding:0.15rem 0.4rem;font-family:ui-monospace,monospace;font-size:0.78rem;color:#555;">
+                <a href="#" class="runtime-browse" data-uri="${esc(r.uri)}"
+                   title="Jump to storage browser, parent dir, preview this file"
+                   style="color:inherit;text-decoration:underline dotted;">${esc(r.uri)}</a>
+              </td>
               <td style="padding:0.15rem 0.4rem;text-align:center;">
                 ${invRaw ? (() => {
                   const installed = installedByName.get(r.name) || 0;
@@ -2105,6 +2113,13 @@ async function refreshRuntimeTablesPanel() {
       a.addEventListener('click', ev => {
         ev.preventDefault();
         openRuntimeTableDetail(a.dataset.name);
+      }));
+    // Clicking the URI jumps to the Cluster tab's storage browser +
+    // preview so the operator can see the underlying file.
+    target.querySelectorAll('.runtime-browse').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        jumpToStorageBrowser(a.dataset.uri);
       }));
   } catch (e) {
     target.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
@@ -2258,6 +2273,37 @@ async function openRuntimeTableDetail(name) {
   });
 }
 
+/** Switch to the Cluster tab, walk the storage browser to the file's
+ *  parent dir, preview the file. Called from runtime-tables panel URI
+ *  clicks so operators can verify what's actually on disk. */
+/** Fire a browser Notification (if the user granted permission) for
+ *  long-running operations that finished. Silently no-ops when
+ *  permission is denied/default or Notifications aren't supported. */
+function notify(title, body) {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(title, {body, silent: false, tag: 'hitorro-mesh'});
+    } else if (Notification.permission === 'default') {
+      // Ask once — subsequent calls will hit "granted" or "denied".
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') new Notification(title, {body, silent: false, tag: 'hitorro-mesh'});
+      });
+    }
+  } catch (_) { /* Notification unavailable — silent */ }
+}
+
+function jumpToStorageBrowser(fileUri) {
+  const tabBtn = document.querySelector('[role="tab"][data-target="cluster"]');
+  if (tabBtn) tabBtn.click();
+  // Give the tab a beat to render the storage panel before poking it.
+  setTimeout(() => {
+    const parent = fileUri.replace(/\/[^\/]+$/, '/');
+    browseStorage(parent);
+    setTimeout(() => previewStorageFile(fileUri), 250);
+  }, 150);
+}
+
 /** Copy a JVS type either as JSON (pretty-printed) or as YAML. YAML
  *  conversion is client-side — no round-trip through YAML.stringify;
  *  we just format the well-known JVS shape by hand for readability. */
@@ -2365,9 +2411,17 @@ async function runBatchWrite() {
         </tbody>
       </table>`;
     if (register) refreshRuntimeTablesPanel();
+    // Long batches — signal the user if they've tabbed away.
+    if (queries.length >= 5 && document.hidden) {
+      notify(r.success ? 'Batch write done' : 'Batch write finished with errors',
+             `${r.successes}/${r.totalQueries} succeeded · ${r.totalRowsWritten} rows`);
+    }
   } catch (e) {
     summary.style.color = 'var(--danger)';
     summary.textContent = 'batch failed: ' + (e.message || e);
+    if (queries.length >= 5 && document.hidden) {
+      notify('Batch write failed', e.message || String(e));
+    }
   }
 }
 
@@ -2548,12 +2602,28 @@ async function writePlaygroundQuery() {
       if (r.registered && r.registered.tableName) {
         msg += ` · registered as <code>${esc(r.registered.tableName)}</code>`
              + ` on ${r.registered.agentsNotified} agent(s)`
-             + ` — try <code>SELECT * FROM ${esc(r.registered.tableName)}</code>`;
+             + ` — try <code>SELECT * FROM ${esc(r.registered.tableName)}</code>`
+             + ` <a href="#" id="pg-write-copy-yaml"`
+             + ` data-type-json='${esc(r.registered.typeJson)}'`
+             + ` title="Copy the induced JVS type as YAML"`
+             + ` style="margin-left:0.5rem;text-decoration:none;font-size:0.85em;">📋 YAML</a>`;
         refreshRuntimeTablesPanel();
       } else if (r.registered && r.registered.skipped) {
         msg += ` · registration skipped: ${esc(r.registered.skipped)}`;
       }
       statusEl.innerHTML = msg;
+      // Wire the copy-as-YAML link if present (write-with-register only).
+      $('#pg-write-copy-yaml')?.addEventListener('click', ev => {
+        ev.preventDefault();
+        const tj = ev.currentTarget.dataset.typeJson;
+        try {
+          navigator.clipboard.writeText(jvsTypeToYaml(JSON.parse(tj)));
+          ev.currentTarget.textContent = '✓ copied';
+          setTimeout(() => { if (ev.currentTarget) ev.currentTarget.textContent = '📋 YAML'; }, 2000);
+        } catch (e) {
+          alert('copy failed: ' + (e.message || e));
+        }
+      });
     } else {
       statusEl.style.color = 'var(--danger)';
       statusEl.textContent = 'write failed: ' + (r.error || 'unknown error');
