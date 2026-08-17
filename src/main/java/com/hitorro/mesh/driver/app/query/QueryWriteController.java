@@ -70,15 +70,18 @@ public class QueryWriteController {
     private final ObjectProvider<MinioProtocolAdapter> s3;
     private final Environment env;
     private final RuntimeTableTracker runtimeTracker;
+    private final InventoryProbe inventoryProbe;
 
     public QueryWriteController(MeshDriver driver,
                                 ObjectProvider<MinioProtocolAdapter> s3,
                                 Environment env,
-                                RuntimeTableTracker runtimeTracker) {
+                                RuntimeTableTracker runtimeTracker,
+                                InventoryProbe inventoryProbe) {
         this.driver = driver;
         this.s3 = s3;
         this.env = env;
         this.runtimeTracker = runtimeTracker;
+        this.inventoryProbe = inventoryProbe;
     }
 
     /** {@code GET /mesh/queries/registered} — snapshot of runtime table
@@ -86,6 +89,59 @@ public class QueryWriteController {
     @GetMapping("/registered")
     public List<RuntimeTableTracker.Entry> registered() {
         return runtimeTracker.snapshot();
+    }
+
+    /**
+     * Live per-agent install inventory for a runtime-registered table.
+     * Fires a fan-out request over NATS and collects responses within
+     * a short deadline. Answers "who ACTUALLY has this table right
+     * now?" — as opposed to /mesh/queries/registered which shows
+     * "who did we tell about it".
+     */
+    @GetMapping("/registered/{name}/agents")
+    public Map<String, Object> registeredAgents(@org.springframework.web.bind.annotation.PathVariable("name") String name) {
+        InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));
+        List<Map<String, Object>> holders = new java.util.ArrayList<>();
+        for (com.hitorro.mesh.TableInventoryReply rep : probe.replies()) {
+            for (com.hitorro.mesh.TableInventoryReply.Entry e : rep.tables()) {
+                if (name.equals(e.name())) {
+                    Map<String, Object> h = new LinkedHashMap<>();
+                    h.put("agentId", rep.agentId());
+                    h.put("partitionKey", e.partitionKey());
+                    h.put("source", e.source());
+                    holders.add(h);
+                }
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("name", name);
+        out.put("agentsAsked", probe.agentsAsked());
+        out.put("agentsReplied", probe.replies().size());
+        out.put("holders", holders);
+        return out;
+    }
+
+    /**
+     * Bulk unregister of every runtime-registered table — driver-side
+     * removal + agent fan-out for each. Intended for dev-loop reset.
+     * Returns {removed: [names]}; empty when nothing was registered.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/registered/clear")
+    public Map<String, Object> clearAllRegistered() {
+        List<String> names = new java.util.ArrayList<>();
+        for (RuntimeTableTracker.Entry e : runtimeTracker.snapshot()) {
+            names.add(e.name());
+            driver.tables().remove(e.name());
+            driver.tables().unregisterBroadcast(e.name());
+            driver.publishUnregisterTable(new com.hitorro.mesh.UnregisterTableMessage(
+                    e.name(), e.partitionKey()));
+            runtimeTracker.forget(e.name());
+        }
+        log.info("runtime-tables: cleared {} registered table(s)", names.size());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("removed", names);
+        out.put("count", names.size());
+        return out;
     }
 
     /**

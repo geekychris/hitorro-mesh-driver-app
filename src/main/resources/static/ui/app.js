@@ -1128,10 +1128,19 @@ async function browseStorage(path) {
       entriesEl.innerHTML = '<small class="meta">empty</small>';
       return;
     }
-    entriesEl.innerHTML = `<table style="width:100%;font-size:0.85rem;">
+    const anyFiles = entries.some(e => !e.isDir);
+    entriesEl.innerHTML = `
+      <div id="storage-bulk-bar" style="display:none;margin-bottom:0.3rem;">
+        <span class="meta" id="storage-bulk-count"></span>
+        <button id="storage-bulk-delete" class="secondary" style="margin-left:0.5rem;padding:0.15rem 0.5rem;color:var(--danger);">🗑 Delete selected</button>
+      </div>
+      <table style="width:100%;font-size:0.85rem;">
       <tbody>
       ${entries.map(e => `
         <tr>
+          <td style="padding:0.15rem 0.4rem;width:1.5rem;">
+            ${e.isDir ? '' : `<input type="checkbox" class="storage-check" data-path="${esc(joinFile(resolved, e.name))}" style="margin:0;">`}
+          </td>
           <td style="padding:0.15rem 0.4rem;">
             ${e.isDir
               ? `<a href="#" data-path="${esc(joinPath(resolved, e.name))}" data-kind="dir">📁 ${esc(e.name)}/</a>`
@@ -1153,6 +1162,39 @@ async function browseStorage(path) {
         </tr>`).join('')}
       </tbody></table>
       <div id="storage-preview" style="display:none;margin-top:0.5rem;"></div>`;
+    // Wire bulk-select behaviours.
+    const bar   = $('#storage-bulk-bar');
+    const count = $('#storage-bulk-count');
+    const bulkBtn = $('#storage-bulk-delete');
+    const refreshBar = () => {
+      const checked = document.querySelectorAll('.storage-check:checked');
+      if (checked.length === 0) {
+        bar.style.display = 'none';
+      } else {
+        bar.style.display = 'block';
+        count.textContent = `${checked.length} file(s) selected`;
+      }
+    };
+    document.querySelectorAll('.storage-check').forEach(cb =>
+      cb.addEventListener('change', refreshBar));
+    if (bulkBtn) bulkBtn.addEventListener('click', async () => {
+      const paths = [...document.querySelectorAll('.storage-check:checked')].map(cb => cb.dataset.path);
+      if (!paths.length) return;
+      if (!confirm(`Delete ${paths.length} object(s)? This cannot be undone.`)) return;
+      bulkBtn.disabled = true;
+      const results = await Promise.allSettled(paths.map(p =>
+        api('/mesh/storage/object?path=' + encodeURIComponent(p), {method: 'DELETE'})));
+      const ok = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
+      const fail = results.length - ok;
+      browseStorage(resolved);
+      const target = $('#storage-preview');
+      if (target) {
+        target.style.display = 'block';
+        target.innerHTML = fail
+          ? `<small><span style="color:var(--success)">${ok} deleted</span> · <span style="color:var(--danger)">${fail} failed</span></small>`
+          : `<small style="color:var(--success)">🗑 deleted ${ok} object(s)</small>`;
+      }
+    });
     entriesEl.querySelectorAll('a[data-path]').forEach(a => {
       // Skip download links (they should do the browser's native GET).
       if (a.classList.contains('storage-delete')) {
@@ -1905,18 +1947,18 @@ async function openRuntimeTableDetail(name) {
   body.innerHTML = '<small class="meta">loading…</small>';
   dlg.showModal();
 
-  const [entryRes, sampleRes, agentsRes] = await Promise.allSettled([
+  const [entryRes, sampleRes, holdersRes] = await Promise.allSettled([
     api('/mesh/queries/registered').then(rows => rows.find(r => r.name === name)),
     api('/mesh/queries', {
       method: 'POST', headers: {'content-type':'application/json'},
       body: JSON.stringify({sql: 'SELECT * FROM ' + name + ' LIMIT 20', timeoutMs: 10000}),
     }),
-    api('/mesh/agents'),
+    api('/mesh/queries/registered/' + encodeURIComponent(name) + '/agents'),
   ]);
 
   const entry = entryRes.status === 'fulfilled' ? entryRes.value : null;
   const sample = sampleRes.status === 'fulfilled' ? sampleRes.value : {rows: [], error: sampleRes.reason?.message};
-  const agents = agentsRes.status === 'fulfilled' ? (agentsRes.value || []) : [];
+  const holdersInfo = holdersRes.status === 'fulfilled' ? holdersRes.value : {holders: [], agentsAsked: 0, agentsReplied: 0};
 
   let schemaHtml = '<em>no tracker entry (perhaps registered before driver restart)</em>';
   if (entry) {
@@ -1954,7 +1996,10 @@ async function openRuntimeTableDetail(name) {
       </table></div>`;
   }
 
-  const jvsqlAgents = agents.filter(a => (a.capabilities || []).includes('jvssql'));
+  const holders = holdersInfo.holders || [];
+  const holdersHtml = holders.length
+    ? holders.map(h => `<li><code>${esc(h.agentId)}</code> <span class="meta">— ${esc(h.source)}, pk=${esc(h.partitionKey ?? 'null')}</span></li>`).join('')
+    : '<li><em>no agent responded with this table installed</em></li>';
 
   body.innerHTML = `
     <section style="margin-top:0.4rem;">
@@ -1976,10 +2021,9 @@ async function openRuntimeTableDetail(name) {
       ${sampleHtml}
     </section>
     <section style="margin-top:0.6rem;">
-      <h4 style="margin:0 0 0.3rem;">Live jvssql agents <span class="meta">— eligible to serve</span></h4>
-      <ul style="margin:0;padding-left:1.2rem;">
-        ${jvsqlAgents.length ? jvsqlAgents.map(a => `<li><code>${esc(a.agentId)}</code></li>`).join('') : '<li><em>none</em></li>'}
-      </ul>
+      <h4 style="margin:0 0 0.3rem;">Agents actually holding this table
+        <span class="meta">— ${holdersInfo.agentsReplied}/${holdersInfo.agentsAsked} agents responded</span></h4>
+      <ul style="margin:0;padding-left:1.2rem;">${holdersHtml}</ul>
     </section>`;
 }
 
@@ -1992,6 +2036,23 @@ async function unregisterRuntimeTable(name) {
     refreshRuntimeTablesPanel();
   } catch (e) {
     alert('unregister failed: ' + (e.message || e));
+  }
+}
+
+async function clearAllRuntimeTables() {
+  const count = document.querySelectorAll('#pg-runtime-tables tbody tr').length;
+  if (!count) return;
+  if (!confirm(`Unregister ALL ${count} runtime-registered table(s)? This drops driver-side entries AND removes them from every agent. This cannot be undone.`)) return;
+  try {
+    const r = await api('/mesh/queries/registered/clear', {method: 'POST'});
+    refreshRuntimeTablesPanel();
+    const st = $('#pg-write-status');
+    if (st) {
+      st.style.color = 'var(--success)';
+      st.innerHTML = `🗑 cleared ${r.count} table(s)`;
+    }
+  } catch (e) {
+    alert('clear-all failed: ' + (e.message || e));
   }
 }
 
@@ -2570,6 +2631,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#pg-write-format')?.addEventListener('change', updateWriteResolvedHint);
   updateWriteResolvedHint();
   refreshRuntimeTablesPanel();
+  $('#pg-runtime-clear-all')?.addEventListener('click', ev => {
+    ev.preventDefault();
+    clearAllRuntimeTables();
+  });
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
     $('#pg-result').hidden = true;
