@@ -55,9 +55,12 @@ public class MinioLifecycleController {
     }
 
     @PostMapping("/sync")
-    public ResponseEntity<Map<String, Object>> sync() {
+    public ResponseEntity<Map<String, Object>> sync(
+            @org.springframework.web.bind.annotation.RequestParam(name = "dataset", required = false) String dataset) {
         try {
-            return ResponseEntity.ok(svc.sync());
+            return ResponseEntity.ok(svc.sync(dataset));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
         } catch (Exception e) {

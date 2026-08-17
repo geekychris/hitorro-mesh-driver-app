@@ -1015,6 +1015,14 @@ function renderStorage(s) {
   $('#minio-stop-btn').addEventListener('click', () => minioAction('stop'));
   refreshMinioStatus();
 
+  // Per-dataset sync links in the presence matrix.
+  document.querySelectorAll('.dataset-sync').forEach(a => {
+    a.addEventListener('click', ev => {
+      ev.preventDefault();
+      syncOneDataset(a.dataset.ds);
+    });
+  });
+
   // Per-dataset local/s3 matrix. Only shown when S3 is configured — no
   // point comparing when there's only one backend.
   const rows = s.datasets || [];
@@ -1028,6 +1036,7 @@ function renderStorage(s) {
             <th style="text-align:left;padding:0.2rem 0.4rem;">dataset</th>
             <th style="text-align:center;padding:0.2rem 0.4rem;">local</th>
             <th style="text-align:center;padding:0.2rem 0.4rem;">MinIO</th>
+            <th style="text-align:center;padding:0.2rem 0.4rem;">action</th>
           </tr></thead>
           <tbody>
           ${rows.map(r => `
@@ -1035,6 +1044,12 @@ function renderStorage(s) {
               <td style="padding:0.2rem 0.4rem;"><code>${esc(r.id)}</code></td>
               <td style="text-align:center;padding:0.2rem 0.4rem;">${r.local ? '✅' : '·'}</td>
               <td style="text-align:center;padding:0.2rem 0.4rem;">${r.s3    ? '✅' : '·'}</td>
+              <td style="text-align:center;padding:0.2rem 0.4rem;">
+                <a href="#" class="dataset-sync"
+                   data-ds="${esc(r.id)}"
+                   title="Sync ${esc(r.id)} to MinIO"
+                   style="text-decoration:none;">↻</a>
+              </td>
             </tr>
           `).join('')}
           </tbody>
@@ -1125,15 +1140,34 @@ async function browseStorage(path) {
           <td style="padding:0.15rem 0.4rem;text-align:right;color:#888;">
             ${e.isDir ? '' : humanBytes(e.size)}
           </td>
+          <td style="padding:0.15rem 0.4rem;text-align:right;white-space:nowrap;">
+            ${e.isDir ? '' : `
+              <a href="/mesh/storage/download?path=${encodeURIComponent(joinFile(resolved, e.name))}"
+                 title="Download ${esc(e.name)}"
+                 style="text-decoration:none;">⬇</a>
+              <a href="#" class="storage-delete" data-path="${esc(joinFile(resolved, e.name))}"
+                 title="Delete ${esc(e.name)}"
+                 style="margin-left:0.3rem;text-decoration:none;color:var(--danger);">🗑</a>
+            `}
+          </td>
         </tr>`).join('')}
       </tbody></table>
       <div id="storage-preview" style="display:none;margin-top:0.5rem;"></div>`;
-    entriesEl.querySelectorAll('a[data-path]').forEach(a =>
-      a.addEventListener('click', ev => {
-        ev.preventDefault();
-        if (a.dataset.kind === 'dir') browseStorage(a.dataset.path);
-        else previewStorageFile(a.dataset.path);
-      }));
+    entriesEl.querySelectorAll('a[data-path]').forEach(a => {
+      // Skip download links (they should do the browser's native GET).
+      if (a.classList.contains('storage-delete')) {
+        a.addEventListener('click', ev => {
+          ev.preventDefault();
+          deleteStorageObject(a.dataset.path);
+        });
+      } else if (!a.getAttribute('href')?.startsWith('/mesh/storage/download')) {
+        a.addEventListener('click', ev => {
+          ev.preventDefault();
+          if (a.dataset.kind === 'dir') browseStorage(a.dataset.path);
+          else previewStorageFile(a.dataset.path);
+        });
+      }
+    });
   } catch (e) {
     entriesEl.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
   }
@@ -1148,6 +1182,32 @@ function joinPath(base, name) {
  *  read as a dir by the S3 adapter). */
 function joinFile(base, name) {
   return base.endsWith('/') ? base + name : base + '/' + name;
+}
+
+/** Delete an object from storage after a confirm. Refreshes the browse
+ *  view on success so the row disappears; leaves an error message
+ *  behind the preview panel on failure. */
+async function deleteStorageObject(fileUri) {
+  if (!confirm(`Delete ${fileUri}? This cannot be undone.`)) return;
+  const target = $('#storage-preview');
+  try {
+    const r = await api('/mesh/storage/object?path=' + encodeURIComponent(fileUri),
+                        { method: 'DELETE' });
+    if (r.error) throw new Error(r.error);
+    // Reload the current directory listing to reflect the removal.
+    // We know the parent by trimming the last path segment.
+    const parent = fileUri.replace(/\/[^\/]+$/, '/');
+    browseStorage(parent);
+    if (target) {
+      target.style.display = 'block';
+      target.innerHTML = `<small style="color:var(--success)">🗑 deleted <code>${esc(fileUri)}</code></small>`;
+    }
+  } catch (e) {
+    if (target) {
+      target.style.display = 'block';
+      target.innerHTML = `<small style="color:var(--danger)">delete failed: ${esc(e.message || e)}</small>`;
+    }
+  }
 }
 
 /** Fetch and render a head-of-file preview inline under the entries
@@ -1216,6 +1276,23 @@ async function refreshMinioStatus() {
     badge.textContent = 'unknown';
     badge.className = 'badge';
     detail.textContent = e.message || String(e);
+  }
+}
+
+/** Sync one dataset — narrower than the full Sync-datasets button.
+ *  Wired in renderStorage on each row of the dataset presence matrix. */
+async function syncOneDataset(datasetId) {
+  const msg = $('#minio-status-msg');
+  if (msg) msg.innerHTML = `<span class="meta">syncing ${esc(datasetId)}…</span>`;
+  try {
+    const r = await api('/mesh/storage/minio/sync?dataset=' + encodeURIComponent(datasetId),
+                        { method: 'POST' });
+    if (!r.success) throw new Error(r.error || 'sync failed');
+    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)}</span>`;
+    const storage = await api('/mesh/storage');
+    renderStorage(storage);
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message || e)}</span>`;
   }
 }
 

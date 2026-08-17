@@ -5,6 +5,7 @@ package com.hitorro.mesh.driver.app;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hitorro.mesh.AgentDescriptor;
+import com.hitorro.mesh.UnregisterTableMessage;
 import com.hitorro.mesh.driver.DistributedTable;
 import com.hitorro.mesh.driver.DistributedTableRegistry;
 import com.hitorro.mesh.driver.MeshDriver;
@@ -635,11 +636,19 @@ public class MeshRestController {
      * isn't registered. Doesn't touch agent-side data.
      */
     @DeleteMapping("/tables/{name}")
-    public Map<String, Object> unregisterTable(@PathVariable("name") String name) {
+    public Map<String, Object> unregisterTable(@PathVariable("name") String name,
+                                               @RequestParam(name = "partitionKey", required = false) String partitionKey) {
         boolean removed = driver.tables().remove(name);
+        // Also drop the broadcast-name half if it was registered as a
+        // runtime broadcast-as-distributed (write panel does this).
+        driver.tables().unregisterBroadcast(name);
+        // Fan out to every live agent so they drop the runtime install
+        // from RuntimeTableRegistry + tombstone the journal.
+        driver.publishUnregisterTable(new UnregisterTableMessage(name, partitionKey));
         if (!removed) throw new IllegalArgumentException("no distributed table registered as: " + name);
-        log.info("runtime-unregistered distributed table: {}", name);
-        return Map.of("removed", name);
+        log.info("runtime-unregistered distributed table: {} (partitionKey={})", name, partitionKey);
+        return Map.of("removed", name, "partitionKey", partitionKey == null ? "" : partitionKey,
+                "fannedOut", true);
     }
 
     /**
@@ -660,9 +669,11 @@ public class MeshRestController {
     @DeleteMapping("/broadcast-tables/{name}")
     public Map<String, Object> unregisterBroadcast(@PathVariable("name") String name) {
         boolean removed = driver.tables().unregisterBroadcast(name);
+        // Fan-out so agents drop their runtime install (broadcast pk convention).
+        driver.publishUnregisterTable(new UnregisterTableMessage(name, null));
         if (!removed) throw new IllegalArgumentException("no broadcast table registered as: " + name);
         log.info("runtime-unregistered broadcast table: {}", name);
-        return Map.of("removed", name);
+        return Map.of("removed", name, "fannedOut", true);
     }
 
     /** Minimal runtime DistributedTable implementation — no streaming, batch only. */

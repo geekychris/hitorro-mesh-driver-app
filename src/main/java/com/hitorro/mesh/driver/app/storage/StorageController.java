@@ -53,6 +53,37 @@ public class StorageController {
     }
 
     /**
+     * Delete an object at the given URI via {@link StorageService#delete}.
+     */
+    @org.springframework.web.bind.annotation.DeleteMapping("/object")
+    public ResponseEntity<Map<String, Object>> deleteObject(@RequestParam(name = "path") String path) {
+        try {
+            return ResponseEntity.ok(storage.delete(path));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /** Stream the file at the given URI — Content-Type octet-stream +
+     *  Content-Disposition attachment so browsers save-as. */
+    @GetMapping("/download")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> download(
+            @RequestParam(name = "path") String path) throws Exception {
+        com.hitorro.util.basefile.fs.BaseFile bf = storage.openForDownload(path);
+        org.springframework.core.io.InputStreamResource body =
+                new org.springframework.core.io.InputStreamResource(bf.getInputStream());
+        String filename = bf.getName();
+        return org.springframework.http.ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE,
+                        "application/octet-stream")
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + filename + "\"")
+                .body(body);
+    }
+
+    /**
      * Head-of-file preview — first {@code lines} lines (default 20, capped
      * at 500) or {@code bytes} bytes (default 16KB, capped at 256KB),
      * whichever comes first. Parquet files return their Avro schema

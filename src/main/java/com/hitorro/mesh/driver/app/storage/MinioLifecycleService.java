@@ -172,7 +172,7 @@ public class MinioLifecycleService {
      * Prints the script output so the caller can see per-dataset progress
      * (the script uses {@code mc mirror} which reports bytes/files).
      */
-    public Map<String, Object> sync() throws IOException, InterruptedException {
+    public Map<String, Object> sync(String dataset) throws IOException, InterruptedException {
         Map<String, Object> out = new LinkedHashMap<>();
         File dir = findScriptsDir();
         if (dir == null) throw new IllegalStateException("MinIO scripts dir not found.");
@@ -181,9 +181,19 @@ public class MinioLifecycleService {
                     + " — click Start first.");
         }
         List<String> stdout = new ArrayList<>();
-        int rc = runScript(dir, "minio-sync-datasets.sh", stdout);
+        // Basic safety filter — dataset ids are lowercase-alphanumeric + dash,
+        // never contain shell-meta chars. Reject anything that would break
+        // out of the argv position.
+        if (dataset != null && !dataset.isBlank()) {
+            if (!dataset.matches("[a-zA-Z0-9._-]+")) {
+                throw new IllegalArgumentException("invalid dataset id: " + dataset);
+            }
+        }
+        int rc = runScript(dir, "minio-sync-datasets.sh", stdout,
+                dataset == null || dataset.isBlank() ? new String[0] : new String[]{dataset});
         out.put("scriptExitCode", rc);
         out.put("scriptOutput", String.join("\n", stdout));
+        out.put("dataset", dataset == null ? "" : dataset);
         out.put("success", rc == 0);
         return out;
     }
@@ -267,15 +277,25 @@ public class MinioLifecycleService {
         }
     }
 
-    /** Run a shell script from the scripts dir, capturing stdout+stderr. */
+    /** Overload that runs with no extra args. */
     private static int runScript(File dir, String name, List<String> stdout)
+            throws IOException, InterruptedException {
+        return runScript(dir, name, stdout, new String[0]);
+    }
+
+    /** Run a shell script from the scripts dir, capturing stdout+stderr. */
+    private static int runScript(File dir, String name, List<String> stdout, String[] args)
             throws IOException, InterruptedException {
         File script = new File(dir, name);
         if (!script.canExecute()) {
             // Best-effort chmod.
             script.setExecutable(true, true);
         }
-        Process p = new ProcessBuilder("/bin/bash", script.getAbsolutePath())
+        List<String> cmd = new ArrayList<>();
+        cmd.add("/bin/bash");
+        cmd.add(script.getAbsolutePath());
+        for (String a : args) cmd.add(a);
+        Process p = new ProcessBuilder(cmd)
                 .directory(dir).redirectErrorStream(true).start();
         try (var reader = new java.io.BufferedReader(
                 new java.io.InputStreamReader(p.getInputStream()))) {

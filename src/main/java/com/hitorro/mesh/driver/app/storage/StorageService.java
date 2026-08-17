@@ -312,6 +312,43 @@ public class StorageService {
         return prefix + trimmed.substring(0, slash + 1);
     }
 
+    /**
+     * Delete an object (or directory). Routes through {@link BaseFile#delete}
+     * so file:/, s3://, hdfs://, ftp:// all work uniformly.
+     */
+    public Map<String, Object> delete(String path) throws Exception {
+        String resolved = resolveBrowsePath(path);
+        BaseFile bf = BaseFileSystem.getBaseFileFromPath(resolved);
+        if (bf == null || !bf.exists()) {
+            throw new IllegalArgumentException("path not found: " + resolved);
+        }
+        boolean isDir = bf.isDir();
+        boolean deleted = bf.delete();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("path", path);
+        out.put("resolved", resolved);
+        out.put("wasDir", isDir);
+        out.put("deleted", deleted);
+        return out;
+    }
+
+    /**
+     * Open a stream for a file — the caller writes it out with the right
+     * Content-Type + Content-Disposition. Returns the raw {@link BaseFile}
+     * so the caller can also read {@code length()} + {@code getName()}.
+     */
+    public BaseFile openForDownload(String path) throws Exception {
+        String resolved = resolveBrowsePath(path);
+        BaseFile bf = BaseFileSystem.getBaseFileFromPath(resolved);
+        if (bf == null || !bf.exists()) {
+            throw new IllegalArgumentException("path not found: " + resolved);
+        }
+        if (bf.isDir()) {
+            throw new IllegalArgumentException("cannot download a directory: " + resolved);
+        }
+        return bf;
+    }
+
     private static long safeLength(BaseFile bf) {
         try { return bf.length(); } catch (Exception e) { return -1L; }
     }
