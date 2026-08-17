@@ -295,7 +295,12 @@
       <header>
         <span>Inventory matrix <span id="inventory-badge" class="badge">?</span></span>
         <small class="meta">GET /mesh/queries/inventory · who holds what, live probe</small>
-        <a href="#" id="inventory-refresh" style="float:right;text-decoration:none;">↻</a>
+        <span style="float:right;">
+          <a href="#" id="inventory-reconcile"
+             title="Unregister all runtime entries agents hold (drops orphans from earlier driver sessions)"
+             style="text-decoration:none;color:var(--danger);margin-right:0.5rem;font-size:0.85rem;">🧹 reconcile</a>
+          <a href="#" id="inventory-refresh" style="text-decoration:none;">↻</a>
+        </span>
       </header>
       <div id="inventory-body">…</div>
     </article>
@@ -515,6 +520,11 @@
                  title="Unregister EVERY runtime-registered table (driver + all agents)"
                  style="margin-left:0.5rem;color:var(--danger);text-decoration:none;font-size:0.8rem;">
                 🗑 clear all
+              </a>
+              <a href="#" id="pg-runtime-reconcile"
+                 title="Probe agents for orphan runtime tables (from earlier driver sessions) and unregister them mesh-wide"
+                 style="margin-left:0.5rem;text-decoration:none;font-size:0.8rem;">
+                🧹 reconcile from inventory
               </a>
             </legend>
             <div id="pg-runtime-tables"></div>

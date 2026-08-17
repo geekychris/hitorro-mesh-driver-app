@@ -99,6 +99,56 @@ public class QueryWriteController {
      * "who did we tell about it".
      */
     /**
+     * Reconcile from inventory — runs an inventory probe, computes the
+     * set of runtime table entries agents hold (regardless of whether
+     * the driver's tracker knows about them), fan-outs
+     * UnregisterTableMessage for each distinct (name, partitionKey)
+     * pair, and clears the tracker. Closes the "orphan runtime tables
+     * from a previous driver session" gap: driver-side tracker only
+     * knows what THIS driver instance registered, but agent journals
+     * survive across driver bounces so entries can accumulate.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/registered/reconcile")
+    public Map<String, Object> reconcileFromInventory() {
+        InventoryProbe.ProbeResult probe = inventoryProbe.probe(java.time.Duration.ofMillis(1500));
+        // Collect distinct (name, partitionKey) pairs marked source=runtime
+        // across ANY agent. LinkedHashSet keeps insertion order for a
+        // predictable response.
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        List<Map<String, String>> targets = new java.util.ArrayList<>();
+        for (com.hitorro.mesh.TableInventoryReply rep : probe.replies()) {
+            for (com.hitorro.mesh.TableInventoryReply.Entry e : rep.tables()) {
+                if (!"runtime".equals(e.source())) continue;
+                String key = e.name() + "@" + (e.partitionKey() == null ? "" : e.partitionKey());
+                if (seen.add(key)) {
+                    Map<String, String> m = new LinkedHashMap<>();
+                    m.put("name", e.name());
+                    m.put("partitionKey", e.partitionKey());
+                    targets.add(m);
+                }
+            }
+        }
+        // Fan out UnregisterTableMessage for each distinct pair, plus
+        // drop the driver-side registrations if present.
+        for (Map<String, String> t : targets) {
+            String name = t.get("name");
+            String pk = t.get("partitionKey");
+            driver.tables().remove(name);
+            driver.tables().unregisterBroadcast(name);
+            driver.publishUnregisterTable(new com.hitorro.mesh.UnregisterTableMessage(name, pk));
+            runtimeTracker.forget(name);
+        }
+        log.info("runtime-tables: reconciled {} runtime entries from inventory ({} agents responded)",
+                targets.size(), probe.replies().size());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("agentsAsked", probe.agentsAsked());
+        out.put("agentsReplied", probe.replies().size());
+        out.put("cleared", targets);
+        out.put("count", targets.size());
+        return out;
+    }
+
+    /**
      * Full inventory probe — every agent's complete table set (boot +
      * runtime). Powers the Cluster tab's inventory matrix.
      */
@@ -211,6 +261,61 @@ public class QueryWriteController {
         public boolean register = false;
         /** Explicit table name; defaults to the bare path (extension stripped). */
         public String tableName;
+        /** Explicit JVS type JSON — bypasses the induce-from-first-row
+         *  default. Use when you know some column is numeric but the
+         *  first row has it null, or to force stricter types
+         *  (core_int / core_short / core_timestamp / …). */
+        public String typeJsonOverride;
+    }
+
+    /** Request body for {@link #updateSchema}. */
+    public static final class SchemaUpdateRequest {
+        public String typeJson;
+    }
+
+    /**
+     * Update the induced type for an already-registered table. Rewrites
+     * the driver-side entry, refreshes the tracker, and re-fan-outs the
+     * registration so agents pick up the new type. Data URI + format
+     * stay the same — the agent re-loads under the new type.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/registered/{name}/schema")
+    public Map<String, Object> updateSchema(@org.springframework.web.bind.annotation.PathVariable("name") String name,
+                                            @RequestBody SchemaUpdateRequest req) throws Exception {
+        RuntimeTableTracker.Entry existing = runtimeTracker.snapshot().stream()
+                .filter(e -> e.name().equals(name)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no runtime table registered as: " + name));
+        if (req.typeJson == null || req.typeJson.isBlank()) {
+            throw new IllegalArgumentException("typeJson is required");
+        }
+        // Parse to validate before we mutate any state.
+        Type parsedType = new Type();
+        parsedType.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+
+        // Re-register with the new type. broadcast-name stays the same;
+        // distributed entry replaces itself.
+        RegisterTableMessage msg = new RegisterTableMessage(
+                name, req.typeJson, existing.uri(), existing.format(),
+                existing.broadcast(), existing.partitionKey());
+        // Driver-side: same dual-registration pattern as first-time register.
+        driver.tables().registerBroadcast(name);
+        DistributedTable.Partition part = new DistributedTable.Partition(
+                "broadcast", java.util.Set.of("jvssql"), -1L);
+        driver.tables().register(new RegisteredWriteTable(
+                name, parsedType, java.util.List.of(part)));
+        // Agent-side: re-fan-out so RuntimeTableRegistry entries reload
+        // with the new type.
+        driver.publishRegisterTable(msg);
+        int agentCount = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+        runtimeTracker.record(msg, agentCount);
+
+        log.info("runtime-tables: updated schema for {} (agents notified: {})", name, agentCount);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("name", name);
+        out.put("typeJson", req.typeJson);
+        out.put("agentsNotified", agentCount);
+        return out;
     }
 
     @PostMapping("/write")
@@ -246,7 +351,8 @@ public class QueryWriteController {
             out.put("rowsWritten", rows);
 
             if (req.register && rows > 0) {
-                out.put("registered", registerAsTable(req, resolved, format, collected.get(0)));
+                out.put("registered", registerAsTable(req, resolved, format,
+                        collected.get(0), req.typeJsonOverride));
             } else if (req.register) {
                 out.put("registered", Map.of("skipped", "no rows written; nothing to register"));
             }
@@ -345,11 +451,14 @@ public class QueryWriteController {
      * and call {@code POST /mesh/broadcast-tables} directly.
      */
     private Map<String, Object> registerAsTable(WriteRequest req, String resolvedUri,
-                                                String format, JsonNode firstRow) {
+                                                String format, JsonNode firstRow,
+                                                String typeJsonOverride) {
         String name = req.tableName != null && !req.tableName.isBlank()
                 ? req.tableName.trim()
                 : deriveTableName(req.path, format);
-        String typeJson = induceTypeJson(name, firstRow);
+        String typeJson = typeJsonOverride != null && !typeJsonOverride.isBlank()
+                ? typeJsonOverride
+                : induceTypeJson(name, firstRow);
 
         // Driver-side registration — TWO forms (mirrors what MeshRegistrar
         // does for datasets):

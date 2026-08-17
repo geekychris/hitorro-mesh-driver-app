@@ -890,6 +890,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'search') refreshSearchTab();
         if (target === 'fleet') refreshFleetTab();
         if (target === 'jobs') refreshJobsTab();
+        updateInventoryPolling();
       } else if (btn.dataset.view) {
         // Scope view-panel toggling to the nearest section OR article. Playground
         // uses article-scoped views (table/chart/json); Pipelines uses section-
@@ -969,6 +970,24 @@ async function refreshCluster() {
  *  cell shows a ✓ tagged with the entry's source (boot / runtime) plus
  *  the partitionKey when non-null. Empty cells mean "agent replied but
  *  didn't have this table". */
+/** Polling handle so we don't stack multiple intervals on tab switches. */
+let _inventoryPollHandle = null;
+
+/** Start/stop the 15-second inventory poll. Called from the tab switcher —
+ *  polls while Cluster is the active tab, stops otherwise. Also stops
+ *  when the browser tab loses visibility (page hidden). */
+function updateInventoryPolling() {
+  const clusterActive = document.querySelector('#cluster.tab-panel.active') != null;
+  const pageVisible = !document.hidden;
+  const shouldPoll = clusterActive && pageVisible;
+  if (shouldPoll && !_inventoryPollHandle) {
+    _inventoryPollHandle = setInterval(refreshInventoryMatrix, 15000);
+  } else if (!shouldPoll && _inventoryPollHandle) {
+    clearInterval(_inventoryPollHandle);
+    _inventoryPollHandle = null;
+  }
+}
+
 async function refreshInventoryMatrix() {
   const badge = $('#inventory-badge');
   const body = $('#inventory-body');
@@ -1958,8 +1977,13 @@ async function refreshRuntimeTablesPanel() {
     }
     fs.hidden = false;
     target.innerHTML = `
+      <div id="runtime-bulk-bar" style="display:none;margin-bottom:0.3rem;">
+        <span class="meta" id="runtime-bulk-count"></span>
+        <button id="runtime-bulk-unregister" class="secondary" style="margin-left:0.5rem;padding:0.15rem 0.5rem;color:var(--danger);">🗑 Unregister selected</button>
+      </div>
       <table style="width:100%;font-size:0.85rem;">
         <thead><tr>
+          <th style="width:1.5rem;padding:0.15rem 0.4rem;"><input type="checkbox" id="runtime-check-all" title="Select all" style="margin:0;"></th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">table</th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">format</th>
           <th style="text-align:left;padding:0.15rem 0.4rem;">uri</th>
@@ -1969,6 +1993,7 @@ async function refreshRuntimeTablesPanel() {
         <tbody>
           ${rows.map(r => `
             <tr>
+              <td style="padding:0.15rem 0.4rem;"><input type="checkbox" class="runtime-check" data-name="${esc(r.name)}" style="margin:0;"></td>
               <td style="padding:0.15rem 0.4rem;">
                 <a href="#" class="runtime-detail" data-name="${esc(r.name)}"
                    title="Show schema, sample rows, and agent fan-out for ${esc(r.name)}">
@@ -1990,6 +2015,29 @@ async function refreshRuntimeTablesPanel() {
           `).join('')}
         </tbody>
       </table>`;
+    // Bulk-select wiring — mirrors the storage browser pattern.
+    const bar = $('#runtime-bulk-bar');
+    const cnt = $('#runtime-bulk-count');
+    const refreshBar = () => {
+      const n = document.querySelectorAll('.runtime-check:checked').length;
+      if (bar) bar.style.display = n ? 'block' : 'none';
+      if (cnt) cnt.textContent = `${n} table(s) selected`;
+    };
+    document.querySelectorAll('.runtime-check').forEach(cb =>
+      cb.addEventListener('change', refreshBar));
+    $('#runtime-check-all')?.addEventListener('change', ev => {
+      document.querySelectorAll('.runtime-check').forEach(cb => cb.checked = ev.target.checked);
+      refreshBar();
+    });
+    $('#runtime-bulk-unregister')?.addEventListener('click', async () => {
+      const names = [...document.querySelectorAll('.runtime-check:checked')].map(cb => cb.dataset.name);
+      if (!names.length) return;
+      if (!confirm(`Unregister ${names.length} runtime table(s)? Removes from driver + all agents.`)) return;
+      await Promise.allSettled(names.map(n =>
+        api('/mesh/tables/' + encodeURIComponent(n) + '?partitionKey=broadcast',
+            { method: 'DELETE' })));
+      refreshRuntimeTablesPanel();
+    });
     target.querySelectorAll('.runtime-unregister').forEach(a =>
       a.addEventListener('click', ev => {
         ev.preventDefault();
@@ -2093,6 +2141,17 @@ async function openRuntimeTableDetail(name) {
     <section style="margin-top:0.6rem;">
       <h4 style="margin:0 0 0.3rem;">Schema <span class="meta">— induced from first row</span></h4>
       ${schemaHtml}
+      <details style="margin-top:0.4rem;">
+        <summary style="cursor:pointer;font-size:0.85rem;">
+          <b>Refine schema</b> <span class="meta">— override types (e.g. force <code>core_long</code>)</span>
+        </summary>
+        <textarea id="runtime-schema-editor" style="width:100%;min-height:10rem;font-family:ui-monospace,monospace;font-size:0.78rem;margin-top:0.3rem;">${esc(entry?.typeJson || '')}</textarea>
+        <div style="margin-top:0.3rem;">
+          <button id="runtime-schema-save" class="secondary" data-name="${esc(name)}"
+                  style="padding:0.15rem 0.5rem;">Update schema on all agents</button>
+          <span id="runtime-schema-msg" class="meta" style="margin-left:0.5rem;"></span>
+        </div>
+      </details>
     </section>
     <section style="margin-top:0.6rem;">
       <h4 style="margin:0 0 0.3rem;">Sample rows <span class="meta">— SELECT * LIMIT 20</span></h4>
@@ -2103,6 +2162,37 @@ async function openRuntimeTableDetail(name) {
         <span class="meta">— ${holdersInfo.agentsReplied}/${holdersInfo.agentsAsked} agents responded</span></h4>
       <ul style="margin:0;padding-left:1.2rem;">${holdersHtml}</ul>
     </section>`;
+
+  // Wire the schema-save button — validates JSON client-side, POSTs to
+  // /mesh/queries/registered/{name}/schema which re-fan-outs.
+  $('#runtime-schema-save')?.addEventListener('click', async ev => {
+    const btn = ev.currentTarget;
+    const msgEl = $('#runtime-schema-msg');
+    const editor = $('#runtime-schema-editor');
+    let typeJson = (editor.value || '').trim();
+    try { JSON.parse(typeJson); }
+    catch (e) {
+      msgEl.style.color = 'var(--danger)';
+      msgEl.textContent = 'invalid JSON: ' + e.message;
+      return;
+    }
+    btn.disabled = true;
+    msgEl.style.color = '';
+    msgEl.textContent = 'updating on agents…';
+    try {
+      const r = await api('/mesh/queries/registered/' + encodeURIComponent(btn.dataset.name) + '/schema',
+        { method: 'POST', headers: {'content-type':'application/json'},
+          body: JSON.stringify({typeJson}) });
+      if (r.error) throw new Error(r.error);
+      msgEl.style.color = 'var(--success)';
+      msgEl.textContent = `✓ updated on ${r.agentsNotified} agent(s)`;
+    } catch (e) {
+      msgEl.style.color = 'var(--danger)';
+      msgEl.textContent = 'update failed: ' + (e.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 async function unregisterRuntimeTable(name) {
@@ -2114,6 +2204,23 @@ async function unregisterRuntimeTable(name) {
     refreshRuntimeTablesPanel();
   } catch (e) {
     alert('unregister failed: ' + (e.message || e));
+  }
+}
+
+async function reconcileRuntimeTables() {
+  if (!confirm('Probe agents for runtime tables and unregister ALL of them mesh-wide? This drops orphans from earlier driver sessions. Cannot be undone.')) return;
+  try {
+    const r = await api('/mesh/queries/registered/reconcile', {method: 'POST'});
+    refreshRuntimeTablesPanel();
+    refreshInventoryMatrix();
+    const st = $('#pg-write-status');
+    if (st) {
+      st.style.color = 'var(--success)';
+      st.innerHTML = `🧹 reconciled ${r.count} runtime table(s) across ${r.agentsReplied}/${r.agentsAsked} agent(s)`;
+    }
+    alert(`Reconciled ${r.count} runtime table(s) across ${r.agentsReplied}/${r.agentsAsked} agent(s).`);
+  } catch (e) {
+    alert('reconcile failed: ' + (e.message || e));
   }
 }
 
@@ -2713,6 +2820,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ev.preventDefault();
     clearAllRuntimeTables();
   });
+  $('#pg-runtime-reconcile')?.addEventListener('click', ev => {
+    ev.preventDefault();
+    reconcileRuntimeTables();
+  });
   // Auto-refresh runtime tables panel when the tab regains focus —
   // catches unregisters/registers done from another tab or curl.
   window.addEventListener('focus', () => {
@@ -2720,11 +2831,18 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshRuntimeTablesPanel();
     }
   });
-  // Inventory matrix refresh button.
+  // Inventory matrix refresh + reconcile buttons.
   $('#inventory-refresh')?.addEventListener('click', ev => {
     ev.preventDefault();
     refreshInventoryMatrix();
   });
+  $('#inventory-reconcile')?.addEventListener('click', ev => {
+    ev.preventDefault();
+    reconcileRuntimeTables();
+  });
+  // Polling on/off with tab visibility.
+  document.addEventListener('visibilitychange', updateInventoryPolling);
+  updateInventoryPolling();
   $('#pg-clear').addEventListener('click', () => {
     setSql('');
     $('#pg-result').hidden = true;
