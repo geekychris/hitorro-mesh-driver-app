@@ -71,17 +71,20 @@ public class QueryWriteController {
     private final Environment env;
     private final RuntimeTableTracker runtimeTracker;
     private final InventoryProbe inventoryProbe;
+    private final PartitionPlacement placement;
 
     public QueryWriteController(MeshDriver driver,
                                 ObjectProvider<MinioProtocolAdapter> s3,
                                 Environment env,
                                 RuntimeTableTracker runtimeTracker,
-                                InventoryProbe inventoryProbe) {
+                                InventoryProbe inventoryProbe,
+                                PartitionPlacement placement) {
         this.driver = driver;
         this.s3 = s3;
         this.env = env;
         this.runtimeTracker = runtimeTracker;
         this.inventoryProbe = inventoryProbe;
+        this.placement = placement;
     }
 
     /** {@code GET /mesh/queries/registered} — snapshot of runtime table
@@ -104,6 +107,126 @@ public class QueryWriteController {
         /** Required when broadcast=false. Convention: "all" means every
          *  jvssql agent installs this partition. */
         public String partitionKey;
+    }
+
+    /** Request body for {@link #registerPartitioned}. */
+    public static final class RegisterPartitionedRequest {
+        public String name;
+        public String typeJson;
+        public String format = "ndjson";
+        public List<PartitionEntry> partitions;
+    }
+
+    /** One partition of a partitioned register request. */
+    public static final class PartitionEntry {
+        public String key;
+        public String uri;
+        /** Optional explicit target — bypasses PartitionPlacement.
+         *  Useful when the caller knows which agent should hold this
+         *  shard (e.g. co-located data). */
+        public String agentId;
+    }
+
+    /**
+     * Register a partitioned table where distinct shards live on
+     * distinct agents. Driver runs the configured
+     * {@link PartitionPlacement} (default: hash) to assign each
+     * partition to one live jvssql agent, then fans out per-agent
+     * {@link RegisterTableMessage}s with {@code targetAgentId} set so
+     * only that agent installs. The agent advertises a
+     * {@code partition:<name>:<key>} capability on its next heartbeat,
+     * so the driver's dispatcher routes partition-scoped queries to
+     * the right agent.
+     *
+     * <p>Behaviour on target-agent drop after registration: the query
+     * dispatcher will fail with "no live agent has capabilities [...
+     * partition:name:key]"; the operator re-hits this endpoint to
+     * get a fresh assignment against the current live set. Full
+     * reactive re-hash-on-drop is a follow-up.</p>
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/register-partitioned")
+    public Map<String, Object> registerPartitioned(@RequestBody RegisterPartitionedRequest req) throws Exception {
+        requireNonBlank("name", req.name);
+        requireNonBlank("typeJson", req.typeJson);
+        if (req.partitions == null || req.partitions.isEmpty()) {
+            throw new IllegalArgumentException("partitions is required and non-empty");
+        }
+        String format = (req.format == null || req.format.isBlank() ? "ndjson" : req.format).toLowerCase();
+
+        // Verify every URI is readable (fail-fast on typos before we
+        // announce to any agent).
+        for (PartitionEntry p : req.partitions) {
+            if (p.key == null || p.key.isBlank())
+                throw new IllegalArgumentException("partition.key is required");
+            if (p.uri == null || p.uri.isBlank())
+                throw new IllegalArgumentException("partition.uri is required for key=" + p.key);
+            com.hitorro.util.basefile.fs.BaseFile bf =
+                    com.hitorro.util.basefile.fs.BaseFileSystem.getBaseFileFromPath(p.uri);
+            if (bf == null || !bf.exists()) {
+                throw new IllegalArgumentException(
+                        "partition " + p.key + ": file not found at " + p.uri);
+            }
+        }
+
+        List<String> liveAgents = driver.agents().agentsWith(java.util.List.of("jvssql"))
+                .stream().map(com.hitorro.mesh.AgentDescriptor::agentId).toList();
+        if (liveAgents.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "cannot register: no live jvssql agents to hold partitions");
+        }
+
+        // Resolve assignments: explicit agentId per partition wins;
+        // remaining fall to the configured placement.
+        List<String> unassignedKeys = req.partitions.stream()
+                .filter(p -> p.agentId == null || p.agentId.isBlank())
+                .map(p -> p.key).toList();
+        Map<String, String> autoAssigned = placement.assign(req.name, unassignedKeys, liveAgents);
+        Map<String, String> assignments = new LinkedHashMap<>();
+        for (PartitionEntry p : req.partitions) {
+            String agentId = (p.agentId != null && !p.agentId.isBlank())
+                    ? p.agentId
+                    : autoAssigned.get(p.key);
+            if (agentId == null || !liveAgents.contains(agentId)) {
+                throw new IllegalArgumentException(
+                        "partition " + p.key + ": target agent " + agentId
+                        + " is not in the live jvssql set " + liveAgents);
+            }
+            assignments.put(p.key, agentId);
+        }
+
+        // Driver-side: register the DistributedTable with per-partition
+        // capability requirements so the dispatcher routes to the right
+        // agent based on the partition:<name>:<key> capability the agent
+        // will advertise once install completes.
+        Type type = new Type();
+        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        List<DistributedTable.Partition> parts = new java.util.ArrayList<>();
+        for (PartitionEntry p : req.partitions) {
+            parts.add(new DistributedTable.Partition(p.key,
+                    java.util.Set.of("jvssql", "partition:" + req.name + ":" + p.key),
+                    -1L));
+        }
+        driver.tables().register(new RegisteredWriteTable(req.name, type, parts));
+
+        // Agent-side: one targeted RegisterTableMessage per partition.
+        for (PartitionEntry p : req.partitions) {
+            String targetAgent = assignments.get(p.key);
+            RegisterTableMessage msg = new RegisterTableMessage(
+                    req.name, req.typeJson, p.uri, format,
+                    /*broadcast=*/false, p.key, null, targetAgent);
+            driver.publishRegisterTable(msg);
+            runtimeTracker.record(msg, /*agentsNotified=*/1);
+        }
+
+        log.info("registered partitioned table {} — {} partitions across {} live agent(s), assignments: {}",
+                req.name, req.partitions.size(), liveAgents.size(), assignments);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("tableName", req.name);
+        out.put("format", format);
+        out.put("liveAgents", liveAgents);
+        out.put("assignments", assignments);
+        out.put("placementStrategy", placement.getClass().getSimpleName());
+        return out;
     }
 
     /** Request body for {@link #registerStreaming}. */
