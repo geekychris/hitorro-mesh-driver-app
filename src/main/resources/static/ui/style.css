@@ -906,3 +906,150 @@ table.result th.row-num-header {
   white-space: pre-wrap; word-break: break-all;
   max-height: 12rem; overflow-y: auto;
 }
+
+/* Cluster-tab dataset catalog */
+.cat-legend-dot {
+  display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  vertical-align: middle; margin: 0 0.35rem 0 0;
+}
+.cat-legend-dot.installed { background: var(--accent-mesh); box-shadow: 0 0 0 2px rgba(230,126,34,0.15); }
+.cat-legend-dot.catalog   { background: #c7c7c7; }
+.catalog-group { border: 1px solid #eaeaea; border-radius: 4px; margin: 0.35rem 0; padding: 0 0.5rem; }
+.catalog-group > summary { cursor: pointer; padding: 0.35rem 0.15rem; font-weight: 600; font-size: 0.85rem; }
+.catalog-group > summary .badge { margin-left: 0.3rem; font-weight: normal; }
+.catalog-items { list-style: none; padding: 0 0 0.3rem 0.4rem; margin: 0; }
+.catalog-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.25rem 0.35rem; border-radius: 3px; cursor: pointer;
+  font-size: 0.85rem;
+}
+.catalog-item:hover { background: #f4f7fa; }
+.catalog-item-main { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.catalog-item-name { font-weight: 500; }
+.catalog-item-id { font-family: ui-monospace, monospace; font-size: 0.72rem; opacity: 0.6; }
+.catalog-item-actions { display: flex; align-items: center; gap: 0.35rem; }
+
+/* ============ Pipelines: hierarchical sub-tabs ============ */
+.tabs.sub-tabs {
+  margin-top: -0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid #d5d5d5;
+  background: #f6f8fb;
+  border-radius: 4px 4px 0 0;
+  padding: 0 0.25rem;
+}
+.tabs.sub-tabs > button {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.9rem;
+}
+
+/* ============ Pipelines Builder ============ */
+.pb-layout {
+  display: grid;
+  grid-template-columns: 20rem 1fr;
+  gap: 0.75rem;
+}
+.pb-nodes-panel  { min-height: 20rem; }
+.pb-editor-panel { min-height: 20rem; }
+.pb-node-list { list-style: none; padding: 0; margin: 0; }
+.pb-node-list li {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  margin-bottom: 0.3rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.pb-node-list li:hover { background: #f0f4f7; border-color: #2E86AB; }
+.pb-node-list li.active {
+  background: #eaf3fa;
+  border-color: #2E86AB;
+  border-left: 3px solid #2E86AB;
+  font-weight: 600;
+}
+.pb-node-list li .pb-node-summary {
+  color: #666;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  margin-left: 0.5rem;
+}
+.pb-depends {
+  display: flex; flex-wrap: wrap; gap: 0.3rem;
+  min-height: 1.4rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px dashed #ddd;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+.pb-depends label { margin: 0 0.4rem 0 0; font-weight: normal; font-size: 0.8rem; }
+.pb-depends .meta { padding: 0.1rem 0.3rem; }
+.pb-block {
+  padding: 0.4rem 0.3rem 0.1rem 0.75rem;
+  border-left: 2px solid #eaeaea;
+  margin: 0.3rem 0 0.6rem 0.3rem;
+}
+.pb-field-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin: 0.3rem 0;
+}
+.pb-field-row label { min-width: 6.5rem; font-size: 0.85rem; color: #444; margin: 0; }
+.pb-field-row input, .pb-field-row select, .pb-field-row textarea {
+  margin: 0; padding: 0.2rem 0.4rem; font-size: 0.85rem;
+  font-family: ui-monospace, monospace;
+}
+.pb-field-row input[type=text], .pb-field-row input[type=number], .pb-field-row select {
+  flex: 1;
+}
+.pb-step-card, .pb-sink-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  padding: 0.35rem 0.5rem;
+  margin: 0.3rem 0;
+  background: #fafcfe;
+}
+.pb-step-card > .pb-card-hdr, .pb-sink-card > .pb-card-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 0.25rem;
+}
+.pb-card-hdr .pb-kind { font-weight: 600; color: #2E86AB; font-size: 0.85rem; }
+.pb-card-hdr button.remove {
+  padding: 0.05rem 0.35rem; font-size: 0.7rem; margin: 0;
+  background: transparent; color: #c0392b; border: 1px solid #f0d5d0;
+}
+.pb-yaml {
+  font-family: ui-monospace, monospace; font-size: 0.75rem;
+  background: #1e2733; color: #e2e8f0; padding: 0.6rem 0.8rem;
+  border-radius: 4px; margin: 0;
+  max-height: 22rem; overflow: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.pb-yaml code { background: transparent !important; color: inherit !important; padding: 0 !important; font-size: inherit !important; }
+
+/* Docs sub-tab */
+.pl-docs-nav { list-style: none; padding: 0; margin: 0; font-size: 0.85rem; }
+.pl-docs-nav li { padding: 0; margin: 0; }
+.pl-docs-nav .pl-docs-cat {
+  font-weight: 600; color: #555; text-transform: uppercase;
+  font-size: 0.7rem; margin: 0.6rem 0 0.2rem;
+  letter-spacing: 0.05em;
+}
+.pl-docs-nav a {
+  display: block; padding: 0.15rem 0.4rem; color: #2E86AB;
+  text-decoration: none; border-radius: 2px;
+  font-family: ui-monospace, monospace;
+}
+.pl-docs-nav a:hover { background: #eaf3fa; }
+.pl-docs-nav a.active { background: #2E86AB; color: white; }
+.pl-docs-body h3 { margin-top: 0; color: #2E86AB; font-family: ui-monospace, monospace; }
+.pl-docs-body pre { background: #1e2733; color: #e2e8f0; padding: 0.7rem 0.9rem; border-radius: 4px; font-size: 0.8rem; overflow-x: auto; }
+/* Pico ships a pink-on-dark inline-code style that leaks into <code> nested
+   in our dark <pre> and reads as garbled text. Force transparent so the
+   pre's own background + light text show through. */
+.pl-docs-body pre code { background: transparent !important; color: inherit !important; padding: 0 !important; font-size: inherit !important; font-family: ui-monospace, monospace; white-space: pre; }
+.pl-docs-body p code, .pl-docs-body li code { background: #f4f7fa; color: #2E86AB; padding: 0 0.25rem; border-radius: 2px; font-size: 0.85em; }
+.pl-docs-body table { font-size: 0.85rem; margin: 0.6rem 0; }
+.pl-docs-body table th { text-align: left; padding: 0.25rem 0.6rem; background: #f0f4f7; }
+.pl-docs-body table td { padding: 0.25rem 0.6rem; border-bottom: 1px solid #eee; }

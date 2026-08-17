@@ -529,17 +529,45 @@ async function refreshDatasets() {
       'Run <code>./scripts/install-all.sh</code> in the hitorro-mesh-datasets repo.</p>';
     return;
   }
-  $('#ds-list').innerHTML = dsCatalog.map(d => `
-    <div class="ds-list-item ${d.id === dsSelectedId ? 'active' : ''}" data-id="${esc(d.id)}">
-      <div class="name">${esc(d.title || d.id)}</div>
-      <span class="meta">
-        <code>${esc(d.tableName)}</code> ·
-        ${esc(d.spdx || 'no-license')} ·
-        ${esc(d.kind)} ·
-        ${d.fields} fields
-      </span>
-    </div>
-  `).join('');
+  // Group by category (same buckets as the Cluster tab's catalog view)
+  // so users can scan the list by topic instead of one long alphabetic
+  // wall. Category comes from /mesh/datasets (added server-side via
+  // DatasetCatalogController.categoryFor).
+  const groupLabels = {
+    geographic:    'Geographic',
+    codification:  'Codification & standards',
+    scholarly:     'Scholarly',
+    reference:     'Reference',
+    'time-series': 'Time-series',
+    other:         'Other',
+  };
+  const order = ['geographic', 'codification', 'scholarly', 'reference', 'time-series', 'other'];
+  const byCat = {};
+  for (const d of dsCatalog) {
+    const c = d.category || 'other';
+    (byCat[c] ||= []).push(d);
+  }
+  const parts = [];
+  for (const c of order) {
+    const items = byCat[c];
+    if (!items || !items.length) continue;
+    items.sort((a, b) => (a.title || a.id).localeCompare(b.title || b.id));
+    parts.push(`<details class="catalog-group" open>
+      <summary>${esc(groupLabels[c] || c)}
+        <span class="badge">${items.length}</span></summary>
+      <div>${items.map(d => `
+        <div class="ds-list-item ${d.id === dsSelectedId ? 'active' : ''}" data-id="${esc(d.id)}">
+          <div class="name">${esc(d.title || d.id)}</div>
+          <span class="meta">
+            <code>${esc(d.tableName)}</code> ·
+            ${esc(d.spdx || 'no-license')} ·
+            ${esc(d.kind)} ·
+            ${d.fields} fields
+          </span>
+        </div>`).join('')}</div>
+    </details>`);
+  }
+  $('#ds-list').innerHTML = parts.join('');
   $$('#ds-list .ds-list-item').forEach(el => {
     el.addEventListener('click', () => selectDataset(el.dataset.id));
   });
@@ -863,9 +891,17 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'fleet') refreshFleetTab();
         if (target === 'jobs') refreshJobsTab();
       } else if (btn.dataset.view) {
-        $$('.view', btn.closest('article')).forEach(v => v.classList.remove('active'));
-        $('#' + target, btn.closest('article')).classList.add('active');
+        // Scope view-panel toggling to the nearest section OR article. Playground
+        // uses article-scoped views (table/chart/json); Pipelines uses section-
+        // scoped sub-tabs (Build/Run/History/Docs).
+        const scope = btn.closest('section, article');
+        $$('.view', scope).forEach(v => v.classList.remove('active'));
+        $('#' + target, scope).classList.add('active');
         if (target === 'pg-chart') renderChart();
+        if (target === 'pl-build')    refreshPlBuilder();
+        if (target === 'pl-run')      refreshPipelines();
+        if (target === 'pl-history')  refreshPlHistory();
+        if (target === 'pl-docs')     refreshPlDocs();
       }
     });
   });
@@ -903,21 +939,185 @@ function setHealthDot(status, errText) {
 // ================================================================ CLUSTER
 async function refreshCluster() {
   try {
-    const [health, agents, tables, cluster] = await Promise.all([
+    const [health, agents, tables, cluster, catalog] = await Promise.all([
       api('/actuator/health').catch(() => ({ status: 'UNKNOWN' })),
       api('/mesh/agents'),
       api('/mesh/tables'),
       api('/mesh/cluster').catch(e => ({ error: e.message })),
+      api('/mesh/catalog').catch(() => null),
     ]);
     renderHealthFriendly(health);
     renderClusterFriendly(cluster);
     renderAgents(agents, cluster);
     renderTables(tables);
+    if (catalog) renderCatalog(catalog);
     $('#health-json').textContent = fmtJson(health);
     $('#cluster-json').textContent = fmtJson(cluster);
   } catch (e) {
     $('#cluster-friendly').innerHTML = `<div class="cluster-status-callout err"><p class="title">Error loading cluster</p><p>${esc(e.message)}</p></div>`;
   }
+}
+
+// Full dataset catalog view on the Cluster tab — grouped by category,
+// shows installed vs catalog-only with a clear visual, and provides
+// per-dataset actions (open in Datasets tab / jump to Playground /
+// copy install command). Backed by /mesh/catalog which merges the
+// shipped manifest set with a scan of $HITORRO_DATASETS_HOME.
+let _lastCatalog = null;
+function renderCatalog(cat) {
+  _lastCatalog = cat;
+  const installedOnly = $('#catalog-installed-only')?.checked;
+  const totals = cat.counts?._total || {};
+  $('#catalog-total-badge').textContent =
+      `${totals.installed ?? 0} / ${totals.total ?? 0}`;
+
+  const groupLabels = {
+    geographic:    'Geographic',
+    codification:  'Codification & standards',
+    scholarly:     'Scholarly',
+    reference:     'Reference',
+    'time-series': 'Time-series',
+    other:         'Other',
+  };
+
+  const parts = [];
+  for (const [groupKey, items] of Object.entries(cat.groups || {})) {
+    const filtered = installedOnly ? items.filter(i => i.installed) : items;
+    if (!filtered.length) continue;
+    parts.push(`<details class="catalog-group" open>
+      <summary>${esc(groupLabels[groupKey] || groupKey)}
+        <span class="badge">${filtered.length}</span></summary>
+      <ul class="catalog-items">
+        ${filtered.map(catalogRowHtml).join('')}
+      </ul>
+    </details>`);
+  }
+  $('#catalog-list').innerHTML =
+      parts.join('') || '<p><small>No datasets to show.</small></p>';
+
+  $$('#catalog-list .catalog-item').forEach(li => {
+    li.addEventListener('click', ev => {
+      if (ev.target.closest('button, a')) return;
+      openCatalogDetail(li.dataset.dsId);
+    });
+  });
+  $$('#catalog-list .catalog-open-datasets').forEach(b => {
+    b.addEventListener('click', () => jumpToDatasetsTab(b.dataset.dsId));
+  });
+  $$('#catalog-list .catalog-open-playground').forEach(b => {
+    b.addEventListener('click', () => jumpToPlayground(b.dataset.dsId));
+  });
+}
+
+function catalogRowHtml(d) {
+  const dotCls = d.installed ? 'installed' : 'catalog';
+  const kindBadge = d.installed
+    ? (d.broadcast
+        ? '<span class="badge accent" title="This dataset ships as a broadcast table — same rows replicated at every agent. Cheap JOIN target.">broadcast</span>'
+        : `<span class="cap" title="Partitioned distributed table. partitionBy=${esc(d.partitionBy || '')}.">partitioned</span>`)
+    : '<span class="cap" title="Not installed — run the install command to fetch data and register the table.">catalog</span>';
+  const actions = d.installed
+    ? `<button class="secondary outline catalog-open-playground" data-ds-id="${esc(d.id)}"
+               style="width:auto;margin:0;font-size:0.7rem;padding:0.15rem 0.5rem;"
+               title="Open Playground with this dataset preloaded — schema + one-click SQL snippets.">Playground</button>`
+    : `<button class="secondary outline catalog-open-datasets" data-ds-id="${esc(d.id)}"
+               style="width:auto;margin:0;font-size:0.7rem;padding:0.15rem 0.5rem;"
+               title="See full manifest + install instructions in the Datasets tab.">How to install</button>`;
+  return `<li class="catalog-item" data-ds-id="${esc(d.id)}"
+              title="${esc(d.description || d.title || d.id)}">
+    <span class="catalog-item-main">
+      <span class="cat-legend-dot ${dotCls}"></span>
+      <span class="catalog-item-name">${esc(d.title || d.id)}</span>
+      <span class="meta catalog-item-id">${esc(d.tableName || d.id)}</span>
+    </span>
+    <span class="catalog-item-actions">
+      ${kindBadge}
+      ${actions}
+    </span>
+  </li>`;
+}
+
+function openCatalogDetail(id) {
+  if (!_lastCatalog) return;
+  let hit = null;
+  for (const items of Object.values(_lastCatalog.groups || {})) {
+    hit = items.find(i => i.id === id);
+    if (hit) break;
+  }
+  if (!hit) return;
+  $('#catalog-detail-name').textContent = hit.title || hit.id;
+  $('#catalog-detail-cat').textContent = hit.category || '?';
+  const inst = $('#catalog-detail-installed');
+  inst.textContent = hit.installed ? 'installed' : 'catalog-only';
+  inst.className = hit.installed ? 'badge success' : 'badge';
+  $('#catalog-detail-desc').textContent = hit.description || '';
+  const hint = $('#catalog-detail-install-hint');
+  if (hit.installed) {
+    hint.hidden = true;
+  } else {
+    hint.hidden = false;
+    $('#catalog-detail-install-cmd').textContent =
+        `cd hitorro-mesh-datasets && ./scripts/${hit.installScript}`;
+  }
+  $('#catalog-detail-schema').innerHTML = hit.fieldCount
+    ? `<p><small class="meta">${hit.fieldCount} fields · table name <code>${esc(hit.tableName || hit.id)}</code></small></p>`
+    : '';
+  const dlg = $('#catalog-detail-dialog');
+  $('#catalog-detail-playground').onclick = () => { dlg.close(); jumpToPlayground(hit.id); };
+  $('#catalog-detail-datasets').onclick   = () => { dlg.close(); jumpToDatasetsTab(hit.id); };
+  dlg.showModal();
+}
+
+function jumpToDatasetsTab(id) {
+  const btn = document.querySelector('button[role="tab"][data-target="datasets"]');
+  if (btn) btn.click();
+  // Best-effort — the Datasets tab exposes selectDataset(id) on the
+  // in-page dataset list; if it isn't wired for this id yet, the tab
+  // still opens on the full list.
+  setTimeout(() => {
+    if (typeof selectDataset === 'function') selectDataset(id);
+    const link = document.querySelector(`[data-dataset-id="${CSS.escape(id)}"]`);
+    if (link) link.click();
+  }, 100);
+}
+
+// Jump straight from a Registered-tables row into Playground with a
+// SELECT against that table typed into the editor. Uses the table name
+// as-is (matches the mesh SQL surface: table names are the snake_cased
+// dataset ids). Best-effort tries to load the matching manifest to
+// prime dataset-tuned snippets on the left; if the table isn't a
+// registered dataset (e.g. runtime-added), we just drop the SQL.
+function openTableInPlayground(tableName) {
+  (async () => {
+    const dsId = tableName.replace(/_/g, '-');
+    try {
+      const m = await api('/mesh/datasets/' + encodeURIComponent(dsId));
+      if (typeof setPlaygroundDatasetContext === 'function') {
+        setPlaygroundDatasetContext(m, tableName);
+      }
+    } catch (_) { /* not a manifest-backed table — fine */ }
+    const sql = `SELECT * FROM ${tableName} LIMIT 20`;
+    if (typeof setSql === 'function') setSql(sql);
+    const btn = document.querySelector('button[role="tab"][data-target="playground"]');
+    if (btn) btn.click();
+  })();
+}
+
+function jumpToPlayground(id) {
+  (async () => {
+    try {
+      const m = await api('/mesh/datasets/' + encodeURIComponent(id));
+      // Prime the playground with dataset-tuned snippets BEFORE the
+      // tab switch, mirroring the flow used from the Datasets tab's
+      // quick-query buttons.
+      const tableName = (m.id || id).replaceAll('-', '_');
+      if (typeof setPlaygroundDatasetContext === 'function') {
+        setPlaygroundDatasetContext(m, tableName);
+      }
+    } catch (_) { /* dataset not installed → fall through, just switch tab */ }
+    const btn = document.querySelector('button[role="tab"][data-target="playground"]');
+    if (btn) btn.click();
+  })();
 }
 
 function renderHealthFriendly(health) {
@@ -1010,35 +1210,73 @@ function renderAgents(agents, cluster) {
 }
 
 function renderTables(tables) {
-  $('#table-count-inline').textContent = tables.length;
-  if (!tables.length) {
+  // Datasets that ship as broadcast get double-registered by the
+  // datasets auto-registrar (registerBroadcast + registerBroadcastAsDistributed
+  // — the latter so scans can hit them, not just JOINs). Users only care
+  // that the name exists — collapse duplicates into a single row that
+  // reports BOTH available shapes.
+  const byName = new Map();
+  for (const t of tables) {
+    const cur = byName.get(t.name);
+    if (!cur) { byName.set(t.name, {...t, kinds: [t.kind]}); continue; }
+    if (!cur.kinds.includes(t.kind)) cur.kinds.push(t.kind);
+    // Prefer the distributed entry's partition list when merging.
+    if (t.kind === 'distributed' && (t.partitions || []).length) {
+      cur.partitions = t.partitions;
+    }
+  }
+  const merged = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  $('#table-count-inline').textContent =
+      merged.length === tables.length
+        ? String(merged.length)
+        : `${merged.length} (${tables.length} raw registrations)`;
+
+  if (!merged.length) {
     $('#table-list').innerHTML = '<p><small>No tables registered. Use the buttons above to add one.</small></p>';
     return;
   }
-  $('#table-list').innerHTML = '<div class="entity-list"><ul>' + tables.map(t => {
-    const isBroadcast = t.kind === 'broadcast';
-    const parts = isBroadcast
-      ? '<span class="badge accent" title="Broadcast table: the SAME rows are replicated at every agent. Use for small dimension tables — JOINs against them are local at each agent (no shuffle). Example: iso_currencies, geonames_country_info.">broadcast</span>'
-      : ((t.partitions || []).map(p => `<span class="cap" title="Partition key '${esc(p.key)}' of a distributed table. Only ONE agent holds this partition; the driver routes scans of this table with WHERE partition-key='${esc(p.key)}' to that agent.">${esc(p.key)}</span>`).join('')
-         || '<small title="Distributed table with no partitions declared yet.">(no partitions)</small>');
-    const streamBadge = t.streaming ? '<span class="badge accent" title="Streaming table: agents watch it live via NATS/Kafka; SELECTs can be windowed and push results as they arrive.">streaming</span>' : '';
+  $('#table-list').innerHTML = '<div class="entity-list"><ul>' + merged.map(t => {
+    const isBroadcast = t.kinds.includes('broadcast');
+    const isDistributed = t.kinds.includes('distributed');
+    let kindBadges = '';
+    if (isBroadcast) {
+      kindBadges += '<span class="badge accent" title="Broadcast table: the SAME rows are replicated at every agent. Use for small dimension tables — JOINs against them are local at each agent (no shuffle).">broadcast</span>';
+    }
+    if (isDistributed) {
+      const parts = (t.partitions || [])
+          .map(p => `<span class="cap" title="Partition key '${esc(p.key)}' — routed to the agent holding this slice.">${esc(p.key)}</span>`)
+          .join('');
+      kindBadges += parts || '<small title="Distributed with a single scan partition.">(scan)</small>';
+    }
+    const streamBadge = t.streaming ? '<span class="badge accent" title="Streaming table: agents watch it live via NATS/Kafka.">streaming</span>' : '';
     return `<li>
        <span>
          <span class="name clickable-name" data-table="${esc(t.name)}">${esc(t.name)}</span>
          ${streamBadge}
        </span>
        <span>
-         ${parts}
+         ${kindBadges}
+         <button class="secondary outline table-open-playground"
+                 data-table="${esc(t.name)}"
+                 style="width:auto;margin:0 0 0 0.4rem;font-size:0.7rem;padding:0.15rem 0.5rem;"
+                 title="Open Playground with a SELECT against this table.">▶ Playground</button>
          <button class="contrast outline delete-table"
                  data-table="${esc(t.name)}"
-                 data-kind="${esc(t.kind || 'distributed')}"
-                 style="width:auto;margin:0 0 0 0.5rem;font-size:0.75rem;padding:0.2rem 0.5rem;"
+                 data-kind="${esc(isBroadcast && !isDistributed ? 'broadcast' : 'distributed')}"
+                 style="width:auto;margin:0 0 0 0.35rem;font-size:0.75rem;padding:0.2rem 0.5rem;"
                  title="Deregister">✕</button>
        </span>
      </li>`;
   }).join('') + '</ul></div>';
   $$('#table-list .clickable-name').forEach(el => {
     el.addEventListener('click', () => showSchema(el.dataset.table, tables));
+  });
+  $$('#table-list .table-open-playground').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      openTableInPlayground(btn.dataset.table);
+    });
   });
   $$('#table-list .delete-table').forEach(btn => {
     btn.addEventListener('click', async (e) => {
@@ -1705,6 +1943,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#add-table-close').addEventListener('click', () => { $('#add-table-panel').hidden = true; });
   $('#add-broadcast-close').addEventListener('click', () => { $('#add-broadcast-panel').hidden = true; });
+
+  // Catalog view — installed-only filter re-renders from cache, dialog close.
+  $('#catalog-installed-only')?.addEventListener('change', () => {
+    if (_lastCatalog) renderCatalog(_lastCatalog);
+  });
+  $('#catalog-detail-close')?.addEventListener('click',
+      () => $('#catalog-detail-dialog').close());
 
   $('#new-table-submit').addEventListener('click', async () => {
     const name = $('#new-table-name').value.trim();
@@ -3094,129 +3339,721 @@ function fmtTime(iso) {
 
 let plHistoryTimer = null;
 
-// ================================================================ PIPELINE BUILDER
-// Form-based YAML composer. Toggle via 🧱 Builder button on the
-// Pipelines tab. Every control change emits YAML into the editor.
+// ================================================================ PIPELINE BUILDER (multi-node DAG)
+// Data model lives entirely in `pbJob`; every UI event mutates it, then
+// `pbRefresh()` re-renders the node list, the selected-node editor, and
+// the live YAML preview. Two-way with the Run tab's YAML editor via the
+// "Send to Run tab" / "Load from YAML" buttons — see pbPushToRun /
+// pbLoadFromYaml. Kind metadata is centralized in PB_SOURCE/STEP/SINK_KINDS
+// so adding a new kind is one entry, not a scatter of switch cases.
 
-const pbSteps = [];
+let pbJob = { id: 'my-job', nodes: [] };
+let pbSelected = -1;   // index into pbJob.nodes, -1 = none
 
-function pbRender() {
-  const host = $('#pb-steps');
-  if (!host) return;
-  host.innerHTML = pbSteps.map((s, i) => `
-    <div class="pl-step" data-idx="${i}">
-      <div class="pl-step-hdr">
-        <span class="meta"><b>${esc(s.kind)}</b> · step ${i+1}</span>
-        <button type="button" class="remove secondary outline" data-idx="${i}">×</button>
-      </div>
-      ${pbStepBody(s)}
-    </div>
-  `).join('');
-  host.querySelectorAll('.remove').forEach(b => b.addEventListener('click', () => {
-    pbSteps.splice(+b.dataset.idx, 1); pbRender(); pbEmit();
-  }));
-  host.querySelectorAll('[data-field]').forEach(el => el.addEventListener('input', () => {
-    const idx = +el.closest('.pl-step').dataset.idx;
-    pbSteps[idx][el.dataset.field] = el.value;
-    pbEmit();
-  }));
+// -- Kind catalog --------------------------------------------------------
+// Each field is one input row. `type` defaults to 'text'; `csv:true` splits
+// on comma on save and joins on render; `textarea:true` renders a multi-
+// line box. `default` primes the value on `+ add`. `doc` deep-links into
+// the Docs sub-tab so users can read the shape without leaving Build.
+const PB_SOURCE_KINDS = {
+  inline:       { fields: [], doc: 'source-inline',
+                  hint: 'literal rows in the YAML — edit them in the Run tab editor for now' },
+  'ndjson-file':{ fields: [{name:'url', placeholder:'file:./data.ndjson[.gz]'}], doc: 'source-ndjson-file' },
+  'json-file':  { fields: [{name:'url', placeholder:'file:./data.json'}], doc: 'source-json-file' },
+  'csv-file':   { fields: [{name:'url', placeholder:'file:./data.csv'}], doc: 'source-csv-file' },
+  sql:          { fields: [{name:'sql', textarea:true, rows:3, placeholder:'SELECT * FROM my_table'}], doc: 'source-sql' },
+  kvstore:      { fields: [{name:'name', placeholder:'store-name'}], doc: 'source-kvstore' },
+  lucene:       { fields: [{name:'name', placeholder:'index-name'}, {name:'query', placeholder:'*:*', default:'*:*'}], doc: 'source-lucene' },
+  ref:          { fields: [{name:'node', placeholder:'upstream-node-id'}], doc: 'source-ref',
+                  hint: 'consumes rows from the specified upstream node — remember to add its id to depends[]' },
+  nats:         { fields: [{name:'servers', default:'nats://localhost:4222'}, {name:'subject', placeholder:'my.subject'}], doc: 'source-nats' },
+  kafka:        { fields: [{name:'bootstrap', default:'localhost:9092'}, {name:'topic'}, {name:'groupId', default:'ui-builder'}], doc: 'source-kafka' },
+};
+const PB_STEP_KINDS = {
+  filter:       { fields: [{name:'expr', placeholder:'e.g. population > 50000000'}], doc: 'step-filter' },
+  project:      { fields: [{name:'cols', csv:true, placeholder:'comma-separated field names'}], doc: 'step-project' },
+  'set-field':  { fields: [{name:'name'}, {name:'value'}], doc: 'step-set-field',
+                  hint: 'value is parsed as number/boolean when it looks like one' },
+  'groovy-map': { fields: [{name:'script', textarea:true, rows:5, placeholder:"row.upper = row.name?.toUpperCase(); return row"}], doc: 'step-groovy-map' },
+  'jvs-enrich': { fields: [{name:'typeJsonResource', placeholder:'classpath:/types/my_type.json'},
+                           {name:'tags', csv:true, default:['basic','segmented','pos']}], doc: 'step-jvs-enrich',
+                  hint: 'runs the JVS enrichment projection — populates dynamic sub-fields (segmented, pos, segmented_ner)' },
+  'jvs-translate':{ fields: [{name:'sourceLang', default:'en'}, {name:'targetLangs', csv:true, default:['es','fr','de']},
+                             {name:'mlsFields', csv:true, default:['title','body']},
+                             {name:'ollamaUrl', default:'http://localhost:11434'}, {name:'model', default:'llama3.2'}], doc: 'step-jvs-translate' },
+};
+const PB_SINK_KINDS = {
+  'memory-table':{ fields: [{name:'name'}], doc: 'sink-memory-table',
+                   hint: 'in-process buffer — read from other nodes via source: {kind: ref, node: X}' },
+  counting:      { fields: [{name:'label'}], doc: 'sink-counting' },
+  'ndjson-file': { fields: [{name:'url', placeholder:'file:./out.ndjson[.gz]'}], doc: 'sink-ndjson-file' },
+  kvstore:       { fields: [{name:'name'}, {name:'keyExpr', default:'id', placeholder:'dotted path'}], doc: 'sink-kvstore' },
+  lucene:        { fields: [{name:'name'}, {name:'storeSource', type:'checkbox', default:true}], doc: 'sink-lucene' },
+  'jvs-lucene':  { fields: [{name:'name'}, {name:'typeJsonResource', placeholder:'classpath:/types/my_type.json'},
+                            {name:'storeSource', type:'checkbox'}], doc: 'sink-jvs-lucene' },
+  nats:          { fields: [{name:'servers', default:'nats://localhost:4222'}, {name:'subject'}], doc: 'sink-nats' },
+};
+
+// -- Model mutations -----------------------------------------------------
+function pbAddNode() {
+  const n = 1 + pbJob.nodes.length;
+  const base = { id: 'node' + n, depends: [], source: {kind: 'inline'},
+                 steps: [], reduce: null, sinks: [{kind: 'counting', label: 'node' + n}] };
+  pbJob.nodes.push(base);
+  pbSelected = pbJob.nodes.length - 1;
+  pbRefresh();
 }
-function pbStepBody(s) {
-  switch (s.kind) {
-    case 'filter':
-      return `<input type="text" data-field="expr" placeholder='e.g. population > 50000000'
-                     value="${esc(s.expr||'')}" style="width:100%"/>`;
-    case 'project':
-      return `<input type="text" data-field="cols" placeholder="comma-separated cols"
-                     value="${esc(s.cols||'')}" style="width:100%"/>`;
-    case 'set-field':
-      return `<div style="display:flex; gap:0.4rem;">
-                <input type="text" data-field="name" placeholder="field name" value="${esc(s.name||'')}" style="flex:1"/>
-                <input type="text" data-field="value" placeholder="value" value="${esc(s.value||'')}" style="flex:2"/>
-              </div>`;
-    case 'groovy-map':
-      return `<textarea data-field="script" placeholder="row.foo = 'bar'; return row" rows="3"
-                        style="width:100%; font-family:ui-monospace,monospace; font-size:0.75rem;">${esc(s.script||'')}</textarea>`;
-    default: return '';
+function pbDeleteNode() {
+  if (pbSelected < 0) return;
+  const removed = pbJob.nodes[pbSelected].id;
+  pbJob.nodes.splice(pbSelected, 1);
+  // Drop dangling depends[] references.
+  for (const n of pbJob.nodes) n.depends = n.depends.filter(d => d !== removed);
+  pbSelected = -1;
+  pbRefresh();
+}
+function pbSelectNode(idx) { pbSelected = idx; pbRefresh(); }
+
+// -- Rendering -----------------------------------------------------------
+function pbRefresh() {
+  if (!$('#pb-node-list')) return;
+  pbRenderNodeList();
+  pbRenderEditor();
+  pbRenderYaml();
+}
+function pbRenderNodeList() {
+  $('#pb-node-count').textContent = pbJob.nodes.length;
+  const host = $('#pb-node-list');
+  if (!pbJob.nodes.length) {
+    host.innerHTML = '<li class="meta" style="border-color:transparent;cursor:default;">no nodes yet</li>';
+    return;
   }
+  host.innerHTML = pbJob.nodes.map((n, i) => `
+    <li data-idx="${i}" class="${i===pbSelected?'active':''}">
+      <span>${esc(n.id)}</span>
+      <span class="pb-node-summary">${esc(n.source?.kind || '?')} → ${n.sinks?.length || 0} sink${n.sinks?.length===1?'':'s'}</span>
+    </li>`).join('');
+  host.querySelectorAll('li[data-idx]').forEach(li =>
+    li.addEventListener('click', () => pbSelectNode(+li.dataset.idx)));
 }
-function pbEmit() {
-  if (!$('#pb-job')) return '';
-  const jobId = ($('#pb-job').value || 'my-job').trim();
-  const sourceKind = $('#pb-source-kind').value;
-  const sourceArg = ($('#pb-source-arg').value || '').trim();
-  const sinks = [];
-  if ($('#pb-sink-mem').checked)     sinks.push({kind: 'memory-table', name: jobId + '-out'});
-  if ($('#pb-sink-cnt').checked)     sinks.push({kind: 'counting', label: jobId});
-  if ($('#pb-sink-ndjson').checked)  sinks.push({kind: 'ndjson-file', url: `target/${jobId}.ndjson`});
-  if ($('#pb-sink-kv').checked)      sinks.push({kind: 'kvstore', name: jobId + '-kv', keyExpr: 'id'});
-  if ($('#pb-sink-lucene').checked)  sinks.push({kind: 'lucene',  name: jobId + '-idx', storeSource: true});
-  if ($('#pb-sink-nats') && $('#pb-sink-nats').checked)
-    sinks.push({kind: 'nats', subject: jobId + '.out', servers: 'nats://localhost:4222'});
-  const source = pbBuildSource(sourceKind, sourceArg);
-  const stepYaml = pbSteps.map(s => '        - ' + JSON.stringify(pbCleanStep(s))).join('\n');
-  const sinkYaml = sinks.map(s => '        - ' + JSON.stringify(s)).join('\n');
-  const yaml = [
-    `job: ${jobId}`,
-    'version: "1"',
-    'nodes:',
-    '  - id: main',
-    '    pipeline:',
-    '      source: ' + JSON.stringify(source),
-    pbSteps.length ? '      steps:\n' + stepYaml : '',
-    sinks.length ? '      sinks:\n' + sinkYaml : '',
-  ].filter(Boolean).join('\n');
-  $('#pb-preview').textContent = yaml;
+function pbRenderEditor() {
+  const empty = $('#pb-editor-empty');
+  const ed = $('#pb-editor');
+  const del = $('#pb-delete-node');
+  if (pbSelected < 0 || !pbJob.nodes[pbSelected]) {
+    empty.hidden = false; ed.hidden = true; del.style.display = 'none';
+    $('#pb-editor-title').textContent = 'Select a node →';
+    return;
+  }
+  empty.hidden = true; ed.hidden = false; del.style.display = '';
+  const node = pbJob.nodes[pbSelected];
+  $('#pb-editor-title').textContent = 'node: ' + node.id;
+  $('#pb-node-id').value = node.id;
+  pbRenderDepends(node);
+  pbRenderSource(node);
+  pbRenderSteps(node);
+  pbRenderReduce(node);
+  pbRenderSinks(node);
+}
+function pbRenderDepends(node) {
+  const host = $('#pb-node-depends');
+  const others = pbJob.nodes.filter((_, i) => i !== pbSelected);
+  if (!others.length) { host.innerHTML = '<span class="meta">(no other nodes yet)</span>'; return; }
+  host.innerHTML = others.map(o => `
+    <label><input type="checkbox" data-dep="${esc(o.id)}"
+             ${node.depends.includes(o.id)?'checked':''}/> ${esc(o.id)}</label>`).join('');
+  host.querySelectorAll('input[type=checkbox]').forEach(cb =>
+    cb.addEventListener('change', () => {
+      const id = cb.dataset.dep;
+      if (cb.checked) { if (!node.depends.includes(id)) node.depends.push(id); }
+      else node.depends = node.depends.filter(d => d !== id);
+      pbRenderYaml();
+    }));
+}
+function pbRenderSource(node) {
+  const host = $('#pb-source-editor');
+  const kind = node.source?.kind || 'inline';
+  const opts = Object.keys(PB_SOURCE_KINDS).map(k =>
+      `<option value="${k}"${k===kind?' selected':''}>${k}</option>`).join('');
+  host.innerHTML = `
+    <div class="pb-field-row"><label>kind</label>
+      <select id="pb-source-kind">${opts}</select>
+      <a href="#" class="meta" data-doc="${PB_SOURCE_KINDS[kind]?.doc||''}" title="Open in Docs">📖</a>
+    </div>
+    ${pbFieldsHtml(PB_SOURCE_KINDS[kind]?.fields || [], node.source, 'src')}
+    ${PB_SOURCE_KINDS[kind]?.hint
+      ? `<p class="meta" style="margin:0.2rem 0 0.4rem 6.9rem;">${esc(PB_SOURCE_KINDS[kind].hint)}</p>` : ''}`;
+  host.querySelector('#pb-source-kind').addEventListener('change', e => {
+    node.source = {kind: e.target.value};
+    // Seed defaults from field defs.
+    (PB_SOURCE_KINDS[node.source.kind]?.fields || []).forEach(f => {
+      if (f.default !== undefined) node.source[f.name] = f.default;
+    });
+    pbRenderEditor(); pbRenderYaml();
+  });
+  pbWireFieldChange(host, 'src', node.source);
+  pbWireDocLinks(host);
+}
+function pbRenderSteps(node) {
+  const host = $('#pb-steps-editor');
+  if (!node.steps.length) {
+    host.innerHTML = '<p class="meta">no steps · rows flow source → sinks unmodified</p>';
+    return;
+  }
+  host.innerHTML = node.steps.map((s, i) => pbCardHtml('step', s, i)).join('');
+  host.querySelectorAll('.pb-step-card').forEach((card, i) => {
+    pbWireFieldChange(card, 'step', node.steps[i]);
+    card.querySelector('button.remove').addEventListener('click', () => {
+      node.steps.splice(i, 1); pbRenderEditor(); pbRenderYaml();
+    });
+  });
+  pbWireDocLinks(host);
+}
+function pbRenderReduce(node) {
+  const host = $('#pb-reduce-editor');
+  const enabled = $('#pb-reduce-enable');
+  enabled.checked = !!node.reduce;
+  enabled.onchange = () => {
+    node.reduce = enabled.checked ? {groupBy: [], aggs: []} : null;
+    pbRenderReduce(node); pbRenderYaml();
+  };
+  if (!node.reduce) { host.innerHTML = '<p class="meta">reduce disabled — flip the checkbox above to add group-by + aggs</p>'; return; }
+  const r = node.reduce;
+  host.innerHTML = `
+    <div class="pb-field-row"><label>group-by</label>
+      <input type="text" data-red="groupBy" placeholder="comma-separated cols" value="${esc((r.groupBy||[]).join(', '))}"/></div>
+    <p class="meta" style="margin:0.2rem 0 0.4rem 6.9rem;">aggregations (name = kind of col):</p>
+    ${(r.aggs || []).map((a, i) => `
+      <div class="pb-field-row" data-agg="${i}">
+        <label></label>
+        <input type="text" placeholder="output name" data-af="name" value="${esc(a.name||'')}" style="width:9rem;flex:0 0 auto;"/>
+        <select data-af="kind" style="width:7rem;flex:0 0 auto;">
+          ${['COUNT','SUM','AVG','MIN','MAX'].map(k => `<option ${a.kind===k?'selected':''}>${k}</option>`).join('')}
+        </select>
+        <input type="text" placeholder="of column (skip for COUNT)" data-af="of" value="${esc(a.of||'')}"/>
+        <button type="button" class="remove secondary outline" style="padding:0.05rem 0.4rem;">×</button>
+      </div>`).join('')}
+    <div class="pb-field-row"><label></label>
+      <button type="button" id="pb-add-agg" class="secondary outline" style="width:auto;padding:0.1rem 0.5rem;">+ agg</button></div>`;
+  host.querySelector('[data-red="groupBy"]').addEventListener('input', e => {
+    r.groupBy = e.target.value.split(',').map(s => s.trim()).filter(Boolean); pbRenderYaml();
+  });
+  host.querySelectorAll('[data-agg]').forEach((row, i) => {
+    row.querySelectorAll('[data-af]').forEach(inp => inp.addEventListener('input', e => {
+      const f = inp.dataset.af;
+      r.aggs[i][f] = f === 'kind' ? e.target.value : e.target.value.trim();
+      pbRenderYaml();
+    }));
+    row.querySelector('button.remove').addEventListener('click', () => {
+      r.aggs.splice(i, 1); pbRenderReduce(node); pbRenderYaml();
+    });
+  });
+  host.querySelector('#pb-add-agg').addEventListener('click', () => {
+    r.aggs.push({name: 'n', kind: 'COUNT'}); pbRenderReduce(node); pbRenderYaml();
+  });
+}
+function pbRenderSinks(node) {
+  const host = $('#pb-sinks-editor');
+  if (!node.sinks.length) {
+    host.innerHTML = '<p class="meta">no sinks · pipeline results discarded — add at least one</p>';
+    return;
+  }
+  host.innerHTML = node.sinks.map((s, i) => pbCardHtml('sink', s, i)).join('');
+  host.querySelectorAll('.pb-sink-card').forEach((card, i) => {
+    pbWireFieldChange(card, 'sink', node.sinks[i]);
+    card.querySelector('button.remove').addEventListener('click', () => {
+      node.sinks.splice(i, 1); pbRenderEditor(); pbRenderYaml();
+    });
+  });
+  pbWireDocLinks(host);
+}
+
+// -- Kind-agnostic field renderers --------------------------------------
+function pbCardHtml(kindClass, entry, idx) {
+  const catalog = kindClass === 'step' ? PB_STEP_KINDS : PB_SINK_KINDS;
+  const meta = catalog[entry.kind] || {fields: []};
+  const doc = meta.doc || '';
+  return `<div class="pb-${kindClass}-card" data-idx="${idx}">
+    <div class="pb-card-hdr">
+      <span class="pb-kind">${esc(entry.kind)}
+        <a href="#" class="meta" data-doc="${esc(doc)}" title="Open in Docs">📖</a>
+      </span>
+      <button type="button" class="remove">remove</button>
+    </div>
+    ${pbFieldsHtml(meta.fields, entry, kindClass)}
+    ${meta.hint ? `<p class="meta" style="margin:0.2rem 0 0 0;">${esc(meta.hint)}</p>` : ''}
+  </div>`;
+}
+function pbFieldsHtml(fields, entry, scope) {
+  return fields.map(f => {
+    const val = entry[f.name];
+    if (f.type === 'checkbox') {
+      const on = val === undefined ? !!f.default : !!val;
+      return `<div class="pb-field-row"><label>${esc(f.name)}</label>
+        <label style="min-width:0;"><input type="checkbox" data-f="${esc(f.name)}" ${on?'checked':''}/>
+        <small class="meta">${esc(f.name)}=${on}</small></label></div>`;
+    }
+    if (f.textarea) {
+      const rows = f.rows || 3;
+      return `<div class="pb-field-row" style="align-items:flex-start;">
+        <label>${esc(f.name)}</label>
+        <textarea data-f="${esc(f.name)}" rows="${rows}" placeholder="${esc(f.placeholder||'')}"
+                  style="width:100%;font-family:ui-monospace,monospace;font-size:0.8rem;">${esc(pbFieldToString(val, f))}</textarea></div>`;
+    }
+    return `<div class="pb-field-row"><label>${esc(f.name)}</label>
+      <input type="text" data-f="${esc(f.name)}" placeholder="${esc(f.placeholder||'')}"
+             value="${esc(pbFieldToString(val, f))}"/></div>`;
+  }).join('');
+}
+function pbFieldToString(v, f) {
+  if (v == null) return f.default != null ? pbFieldToString(f.default, {csv:f.csv}) : '';
+  if (f.csv && Array.isArray(v)) return v.join(', ');
+  return String(v);
+}
+function pbWireFieldChange(root, scope, target) {
+  root.querySelectorAll('[data-f]').forEach(inp => {
+    const fname = inp.dataset.f;
+    const catalog = scope === 'src'   ? PB_SOURCE_KINDS
+                  : scope === 'step'  ? PB_STEP_KINDS
+                  :                     PB_SINK_KINDS;
+    const meta = catalog[target.kind];
+    const fdef = (meta?.fields || []).find(f => f.name === fname) || {};
+    inp.addEventListener(inp.type === 'checkbox' ? 'change' : 'input', () => {
+      let v;
+      if (inp.type === 'checkbox') v = inp.checked;
+      else if (fdef.csv) v = inp.value.split(',').map(s => s.trim()).filter(Boolean);
+      else v = inp.value;
+      // Drop empties so YAML preview stays clean.
+      if (v === '' || (Array.isArray(v) && !v.length)) delete target[fname];
+      else target[fname] = v;
+      pbRenderYaml();
+      // Re-render the node list summary if this was a source kind change etc.
+      if (scope === 'src') pbRenderNodeList();
+    });
+  });
+}
+function pbWireDocLinks(root) {
+  root.querySelectorAll('a[data-doc]').forEach(a =>
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const id = a.dataset.doc;
+      if (!id) return;
+      document.querySelector('[data-view="pl-docs"]').click();
+      setTimeout(() => {
+        const link = document.querySelector(`#pl-docs-nav a[data-anchor="${CSS.escape(id)}"]`);
+        if (link) link.click();
+      }, 30);
+    }));
+}
+
+// -- YAML preview -------------------------------------------------------
+function pbRenderYaml() {
+  const yaml = pbToYaml();
+  $('#pb-yaml-preview').innerHTML = '<code>' + esc(yaml) + '</code>';
   return yaml;
 }
-function pbBuildSource(kind, arg) {
-  if (!arg) {
-    if (kind === 'inline') return {kind:'inline', rows:[{msg:'hello'},{msg:'world'}]};
-    if (kind === 'sql')    return {kind:'sql', sql: 'SELECT * FROM iso_currencies LIMIT 10'};
-    return {kind};
+function pbToYaml() {
+  if (!pbJob.nodes.length) return '(add a node to start)';
+  const lines = [`job: ${pbJob.id || 'my-job'}`, 'version: "1"', 'nodes:'];
+  for (const n of pbJob.nodes) {
+    lines.push(`  - id: ${n.id}`);
+    if (n.depends && n.depends.length) lines.push(`    depends: [${n.depends.join(', ')}]`);
+    lines.push('    pipeline:');
+    lines.push('      source: ' + JSON.stringify(pbCleanEntry(n.source, 'src')));
+    if (n.steps && n.steps.length) {
+      lines.push('      steps:');
+      for (const s of n.steps) lines.push('        - ' + JSON.stringify(pbCleanEntry(s, 'step')));
+    }
+    if (n.reduce) {
+      lines.push('      reduce:');
+      lines.push('        group-by: [' + (n.reduce.groupBy || []).join(', ') + ']');
+      lines.push('        aggs:');
+      for (const a of (n.reduce.aggs || [])) {
+        const o = a.of ? `, of: ${a.of}` : '';
+        lines.push(`          - {name: ${a.name || 'n'}, kind: ${a.kind || 'COUNT'}${o}}`);
+      }
+    }
+    if (n.sinks && n.sinks.length) {
+      lines.push('      sinks:');
+      for (const s of n.sinks) lines.push('        - ' + JSON.stringify(pbCleanEntry(s, 'sink')));
+    }
   }
-  switch (kind) {
-    case 'nats':    return {kind:'nats', subject: arg, servers: 'nats://localhost:4222'};
-    case 'kafka':   return {kind:'kafka', bootstrap: 'localhost:9092', topic: arg, groupId: 'ui-builder'};
-    case 'kvstore': return {kind:'kvstore', name: arg};
-    case 'lucene':  return {kind:'lucene', name: arg, query: ''};
-    case 'sql':     return {kind:'sql', sql: arg};
-    default:        return {kind, url: arg};
-  }
+  return lines.join('\n');
 }
-function pbCleanStep(s) {
-  if (s.kind === 'project') {
-    return {kind: 'project', cols: (s.cols||'').split(',').map(x=>x.trim()).filter(Boolean)};
+function pbCleanEntry(entry, scope) {
+  const catalog = scope === 'src' ? PB_SOURCE_KINDS
+                : scope === 'step' ? PB_STEP_KINDS
+                :                    PB_SINK_KINDS;
+  const meta = catalog[entry.kind];
+  const out = {kind: entry.kind};
+  if (!meta) return {...entry};
+  for (const f of meta.fields) {
+    let v = entry[f.name];
+    if (v === undefined || v === '' || (Array.isArray(v) && !v.length)) continue;
+    if (f.type === 'checkbox') { out[f.name] = !!v; continue; }
+    // Parse numbers / booleans for scalar text fields when it's obvious.
+    if (!f.csv && typeof v === 'string') {
+      const n = Number(v);
+      if (v !== '' && !isNaN(n)) v = n;
+      else if (v === 'true') v = true;
+      else if (v === 'false') v = false;
+    }
+    out[f.name] = v;
   }
-  if (s.kind === 'set-field') {
-    const v = s.value; const num = Number(v);
-    const value = (!isNaN(num) && v !== '' && v !== null) ? num
-                : (v === 'true') ? true : (v === 'false') ? false : v;
-    return {kind: 'set-field', name: s.name, value};
-  }
-  return {...s};
+  return out;
 }
 
+// -- Round-trip helpers -------------------------------------------------
+function pbPushToRun() {
+  const y = pbToYaml();
+  if (!$('#pl-yaml')) return;
+  $('#pl-yaml').value = y;
+  const runTab = document.querySelector('[data-view="pl-run"]');
+  if (runTab) runTab.click();
+  pbStatus('sent to Run tab · click ▶ Run', 'ok');
+}
+function pbLoadFromYaml() {
+  const src = $('#pl-yaml')?.value?.trim();
+  if (!src) { pbStatus('Run tab editor is empty', 'err'); return; }
+  try {
+    const parsed = pbParseYaml(src);
+    pbJob = parsed;
+    pbSelected = pbJob.nodes.length ? 0 : -1;
+    $('#pb-job-id').value = pbJob.id;
+    pbRefresh();
+    pbStatus(`loaded ${pbJob.nodes.length} node(s)`, 'ok');
+  } catch (e) {
+    pbStatus('parse failed: ' + e.message, 'err');
+  }
+}
+// Minimal YAML→JobSpec parser. Handles the shape our own emitter produces
+// plus the shipped examples: top-level scalars, nodes[] with pipeline{}
+// containing source (object literal), steps[] (object literals), reduce
+// with group-by + aggs, sinks[] (object literals). Object literals must
+// be JSON-shaped ({key: value, ...}) — the same format pbToYaml() writes.
+function pbParseYaml(src) {
+  const lines = src.split('\n');
+  const job = {id: 'my-job', nodes: []};
+  let curNode = null, curPipeSect = null;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw.trim() || raw.trim().startsWith('#')) continue;
+    const m2 = raw.match(/^(\s*)/);
+    const indent = m2[1].length;
+    const trimmed = raw.trim();
+    if (indent === 0 && /^job:\s*/.test(trimmed))     { job.id = trimmed.replace(/^job:\s*/, '').replace(/["']/g,''); continue; }
+    if (indent === 0 && /^version:/.test(trimmed))    continue;
+    if (indent === 0 && /^nodes:/.test(trimmed))      continue;
+    // New node — line like "  - id: X" at indent 2
+    let nm;
+    if (indent === 2 && (nm = trimmed.match(/^-\s*id:\s*(\S+)/))) {
+      curNode = {id: nm[1], depends: [], source: {kind:'inline'}, steps: [], reduce: null, sinks: []};
+      job.nodes.push(curNode); curPipeSect = null; continue;
+    }
+    if (!curNode) continue;
+    // depends
+    let dm;
+    if ((dm = trimmed.match(/^depends:\s*\[(.*)\]/))) {
+      curNode.depends = dm[1].split(',').map(s => s.trim()).filter(Boolean); continue;
+    }
+    if (/^pipeline:/.test(trimmed)) { curPipeSect = null; continue; }
+    if (/^source:/.test(trimmed)) {
+      const body = trimmed.replace(/^source:\s*/, '');
+      curNode.source = body.startsWith('{') ? pbParseInlineObj(body) : {kind:'inline'};
+      curPipeSect = 'source'; continue;
+    }
+    if (/^steps:/.test(trimmed))   { curPipeSect = 'steps';  continue; }
+    if (/^reduce:/.test(trimmed))  { curPipeSect = 'reduce'; curNode.reduce = {groupBy:[], aggs:[]}; continue; }
+    if (/^sinks:/.test(trimmed))   { curPipeSect = 'sinks';  continue; }
+    if (curPipeSect === 'steps' && trimmed.startsWith('-')) {
+      curNode.steps.push(pbParseInlineObj(trimmed.replace(/^-\s*/, '')));
+    } else if (curPipeSect === 'sinks' && trimmed.startsWith('-')) {
+      curNode.sinks.push(pbParseInlineObj(trimmed.replace(/^-\s*/, '')));
+    } else if (curPipeSect === 'reduce' && /^group-by:/.test(trimmed)) {
+      const m = trimmed.match(/^group-by:\s*\[(.*)\]/);
+      if (m) curNode.reduce.groupBy = m[1].split(',').map(s => s.trim()).filter(Boolean);
+    } else if (curPipeSect === 'reduce' && /^aggs:/.test(trimmed)) {
+      // aggs entries handled by "- " prefix at deeper indent below
+    } else if (curPipeSect === 'reduce' && trimmed.startsWith('-')) {
+      curNode.reduce.aggs.push(pbParseInlineObj(trimmed.replace(/^-\s*/, '')));
+    }
+  }
+  return job;
+}
+function pbParseInlineObj(s) {
+  // Convert {key: value, key: "value"} style to JSON: quote unquoted keys.
+  // Handles our own emitter output (JSON-shaped) AND the shipped examples
+  // (YAML-flow-shape with unquoted keys/vals).
+  s = s.trim();
+  if (s.startsWith('{')) {
+    try { return JSON.parse(s); } catch (_) { /* fall through */ }
+    // Loose fix: quote bare keys and bare string values, drop trailing
+    // commas. Handles: {kind: inline, url: file:foo, cols: [a, b]}.
+    const jsonish = s
+      .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g, '$1"$2":')     // keys
+      .replace(/:\s*([A-Za-z_][A-Za-z0-9_./:-]*)\s*([,}])/g, ':"$1"$2') // bare scalar values
+      .replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+    try { return JSON.parse(jsonish); } catch (e) { throw new Error(`cannot parse: ${s.substr(0,60)}`); }
+  }
+  return {kind: 'inline'};
+}
+function pbStatus(msg, kind) {
+  const el = $('#pb-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = kind === 'err' ? '#c0392b' : '#27ae60';
+  setTimeout(() => { el.textContent = ''; }, 4000);
+}
+
+// Called when the Build sub-tab is activated (first time or on click).
+function refreshPlBuilder() {
+  if (!$('#pb-node-list')) return;
+  pbRefresh();
+}
+
+// ================================================================ PIPELINES HISTORY
+// Slice of /mesh/jobs — filters to pipeline-shaped runs (has jobSpecName),
+// newest first. Reuses the Jobs tab's summary card.
+async function refreshPlHistory() {
+  const host = $('#pl-history-list');
+  if (!host) return;
+  host.innerHTML = '<p><small>loading…</small></p>';
+  try {
+    const jobs = await api('/mesh/jobs');
+    const pl = jobs.filter(j => j.jobSpecName);
+    pl.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+    $('#pl-history-count').textContent = pl.length;
+    if (!pl.length) { host.innerHTML = '<p class="meta">no pipeline runs yet</p>'; return; }
+    host.innerHTML = '<table style="width:100%;font-size:0.85rem;"><thead><tr>'
+      + '<th style="text-align:left;padding:0.3rem;">job</th>'
+      + '<th style="text-align:left;padding:0.3rem;">state</th>'
+      + '<th style="text-align:left;padding:0.3rem;">started</th>'
+      + '<th style="text-align:left;padding:0.3rem;">nodes</th>'
+      + '<th style="text-align:left;padding:0.3rem;">rows</th></tr></thead><tbody>'
+      + pl.map(j => {
+          const stateCls = j.state === 'SUCCEEDED' ? 'success'
+                        : j.state === 'FAILED'    ? 'danger'
+                        : j.state === 'RUNNING'   ? 'accent' : '';
+          const rows = (j.nodes || []).reduce((s, n) => s + (n.rowsOut || 0), 0);
+          return `<tr>
+            <td style="padding:0.25rem 0.3rem;"><code>${esc(j.jobSpecName || j.jobId)}</code></td>
+            <td style="padding:0.25rem 0.3rem;"><span class="badge ${stateCls}">${esc(j.state || '?')}</span></td>
+            <td style="padding:0.25rem 0.3rem;font-size:0.75rem;">${esc((j.startedAt || '').replace('T', ' ').substr(0,19))}</td>
+            <td style="padding:0.25rem 0.3rem;">${(j.nodes || []).length}</td>
+            <td style="padding:0.25rem 0.3rem;">${rows.toLocaleString()}</td>
+          </tr>`;
+        }).join('') + '</tbody></table>';
+  } catch (e) {
+    host.innerHTML = `<p style="color:var(--danger)"><small>error: ${esc(e.message)}</small></p>`;
+  }
+}
+
+// ================================================================ PIPELINES DOCS
+// Per-kind YAML reference. Populated once — pure static content.
+const PL_DOCS = {
+  categories: [
+    ['Sources', [
+      ['source-inline',      'source: inline',        'literal rows in YAML',
+       `source: {kind: inline, rows: [{msg: hello}, {msg: world}]}`],
+      ['source-ndjson-file', 'source: ndjson-file',   'one JSON per line, gz/bz2/zst decoded by extension',
+       `source: {kind: ndjson-file, url: "file:./data.ndjson.gz"}`],
+      ['source-json-file',   'source: json-file',     'top-level array',
+       `source: {kind: json-file, url: "file:./items.json"}`],
+      ['source-csv-file',    'source: csv-file',      'first row is header, all cells parsed as strings',
+       `source: {kind: csv-file, url: "src/test/resources/countries.csv"}`],
+      ['source-sql',         'source: sql',           'runs a mesh query, streams result rows',
+       `source: {kind: sql, sql: "SELECT * FROM iso_currencies LIMIT 10"}`],
+      ['source-kvstore',     'source: kvstore',       'iterates a RocksDB store; each row is the stored value',
+       `source: {kind: kvstore, name: articles}`],
+      ['source-lucene',      'source: lucene',        'streams hits from a Lucene index — needs mesh-pipelines-lucene',
+       `source: {kind: lucene, name: articles, query: "London"}`],
+      ['source-ref',         'source: ref',           'consumes rows from an upstream node — add its id to depends[]',
+       `source: {kind: ref, node: countries}`],
+      ['source-nats',        'source: nats',          'subscribes to a subject (streaming)',
+       `source: {kind: nats, servers: "nats://localhost:4222", subject: "events.>"}`],
+      ['source-kafka',       'source: kafka',         'consumes a topic (streaming) — needs kafka-clients',
+       `source: {kind: kafka, bootstrap: "localhost:9092", topic: "events", groupId: "pl"}`],
+    ]],
+    ['Steps', [
+      ['step-filter',        'step: filter',          'Groovy boolean expression; rows evaluating false are dropped',
+       `- {kind: filter, expr: "row.population > 50000000"}`],
+      ['step-project',       'step: project',         'keep only the listed columns',
+       `- {kind: project, cols: [id, name, region]}`],
+      ['step-set-field',     'step: set-field',       'set/overwrite one field with a constant',
+       `- {kind: set-field, name: source, value: "seed"}`],
+      ['step-groovy-map',    'step: groovy-map',      'Groovy row→row; return null to drop the row',
+       `- {kind: groovy-map, script: |
+    row.upper = row.name?.toUpperCase()
+    return row}`],
+      ['step-jvs-enrich',    'step: jvs-enrich',      'runs JVS enrichment projection — populates dynamic sub-fields (segmented, pos, segmented_ner, clean)',
+       `- {kind: jvs-enrich, typeJsonResource: "classpath:/types/demo_enriched_article.json",
+     tags: [basic, segmented, pos, ner]}`],
+      ['step-jvs-translate', 'step: jvs-translate',   'translates mls text fields via local Ollama; idempotent (skips langs already present)',
+       `- {kind: jvs-translate, sourceLang: en, targetLangs: [es, fr, de],
+     mlsFields: [title, body], ollamaUrl: "http://localhost:11434", model: llama3.2}`],
+    ]],
+    ['Reduce', [
+      ['reduce-groupby',     'reduce: group-by + aggs', 'group rows and aggregate — routed through JvsSqlEngine',
+       `reduce:
+  group-by: [region]
+  aggs:
+    - {name: n, kind: COUNT}
+    - {name: total_pop, kind: SUM, of: population}
+    - {name: max_pop, kind: MAX, of: population}`],
+    ]],
+    ['Extending', [
+      ['ext-transforms',     'Add a row-by-row transform', 'implement StepAdapter — 4 files (SinkSpec case + adapter + META-INF/services + optional UI hint). For one-off logic, prefer kind: groovy-map (no code changes).',
+       `# Zero code — inline Groovy:
+- kind: groovy-map
+  script: |
+    row.upper = row.name?.toUpperCase()
+    return row
+
+# Or a full StepAdapter (see hitorro-mesh-pipelines/docs/pipeline-framework.adoc):
+1. StepSpec.java  → add @JsonSubTypes.Type(name = "my-kind")
+2. MyStepAdapter  → implements StepAdapter, handles + compile
+3. META-INF/services/com.hitorro.mesh.pipelines.runtime.StepAdapter
+4. app.js         → add to PL_STEP_KINDS + PL_DOCS.categories.Steps`],
+      ['ext-sinks',          'Add a sink',            'implement Sink + SinkAdapter — 4 files. Overriding addIdempotent(taskId, seq, row) gives you exactly-once on retry.',
+       `1. SinkSpec.java  → add @JsonSubTypes.Type(name = "my-sink")
+2. MySink         → implements Sink (open, add, count, close, [addIdempotent])
+3. MySinkAdapter  → implements SinkAdapter, handles + create
+4. META-INF/services/com.hitorro.mesh.pipelines.sinks.SinkAdapter
+
+# Existing reference impls:
+#   memory-table (built-in)  ndjson-file (built-in)  counting (built-in)
+#   kvstore  (hitorro-mesh-pipelines-kvstore)
+#   lucene   (hitorro-mesh-pipelines-lucene)
+#   jvs-lucene (hitorro-mesh-pipelines-jvstype)
+#   nats, kafka (built-in, optional dep)`],
+      ['ext-dynamic-mapper', 'Add an enrichment mapper', 'implement DynamicFieldMapper — computes a dynamic field (NER, POS, sentiment, embedding) on the JVS.',
+       `1. class MyMapper extends DynamicFieldMapper { JsonNode map(jvs, pa, depth) {...} }
+2. Reference from a type Group:
+   { "name": "sentiment", "method": "double", "tags": ["sentiment"],
+     "dynamic": { "class": "com.example.MyMapper",
+                  "fields": [".clean", ".lang"] } }
+3. Run enrichment with your tag:
+   { kind: jvs-enrich, typeJsonResource: "...", tags: [basic, sentiment] }`],
+      ['ext-retrieval',      'Add a retrieval stage', 'implement Retriever — participates in the search → fetch → fixup → paginate → facet → summarize pipeline.',
+       `1. class MyStage implements Retriever {
+     boolean participate(RetrievalContext ctx) { ... }
+     void execute(JVS query, RetrievalContext ctx, RetrievalResult result) { ... }
+   }
+2. Wire into RetrievalPipelineBuilder in RetrievalService.buildPipeline`],
+      ['ext-dataset',        'Add a dataset',         'Author install-<id>.sh + manifest yaml + type json in hitorro-mesh-datasets. mesh-init-data.sh (auto-run by mesh-up.sh) picks it up.',
+       `# hitorro-mesh-datasets/
+#   scripts/install-my-dataset.sh
+#   src/main/resources/manifests/my-dataset.yaml
+#   src/main/resources/types/my_dataset.json
+
+# See hitorro-mesh-datasets/docs/authoring-datasets.adoc for the full walkthrough.
+./scripts/install-my-dataset.sh
+./mesh-down.sh && ./mesh-up.sh`],
+    ]],
+    ['Sinks', [
+      ['sink-memory-table',  'sink: memory-table',    'in-process buffer other nodes can read via source: {kind: ref}',
+       `- {kind: memory-table, name: countries-mem}`],
+      ['sink-counting',      'sink: counting',        'discards rows, counts them — good for a dry-run leaf',
+       `- {kind: counting, label: seed-count}`],
+      ['sink-ndjson-file',   'sink: ndjson-file',     'one JSON per line; .gz suffix → gzip on write',
+       `- {kind: ndjson-file, url: "target/pipelines-test/out.ndjson.gz"}`],
+      ['sink-kvstore',       'sink: kvstore',         'RocksDB put keyed by keyExpr — needs mesh-pipelines-kvstore',
+       `- {kind: kvstore, name: articles, keyExpr: "id.id"}`],
+      ['sink-lucene',        'sink: lucene',          'generic (schema-less) Lucene indexer — needs mesh-pipelines-lucene',
+       `- {kind: lucene, name: airports-search, storeSource: true}`],
+      ['sink-jvs-lucene',    'sink: jvs-lucene',      'type-aware Lucene sink via JVSLuceneIndexWriter — needs mesh-pipelines-jvstype',
+       `- {kind: jvs-lucene, name: articles,
+     typeJsonResource: "classpath:/types/demo_enriched_article.json", storeSource: false}`],
+      ['sink-nats',          'sink: nats',            'publishes each row to a subject',
+       `- {kind: nats, servers: "nats://localhost:4222", subject: "articles.enriched"}`],
+    ]],
+  ],
+};
+let plDocsSelected = null;
+function refreshPlDocs() {
+  const nav = $('#pl-docs-nav'); const body = $('#pl-docs-body');
+  if (!nav) return;
+  if (nav.dataset.built === '1') { if (plDocsSelected) plDocsShow(plDocsSelected); return; }
+  const parts = [];
+  parts.push('<ul style="list-style:none;padding:0;margin:0;">');
+  for (const [cat, items] of PL_DOCS.categories) {
+    parts.push(`<li class="pl-docs-cat">${esc(cat)}</li>`);
+    for (const [id, title] of items) {
+      parts.push(`<li><a href="#" data-anchor="${esc(id)}">${esc(title)}</a></li>`);
+    }
+  }
+  parts.push('</ul>');
+  nav.innerHTML = parts.join('');
+  nav.dataset.built = '1';
+  nav.querySelectorAll('a[data-anchor]').forEach(a =>
+    a.addEventListener('click', e => { e.preventDefault(); plDocsShow(a.dataset.anchor); }));
+  const first = PL_DOCS.categories[0][1][0][0];
+  plDocsShow(first);
+}
+function plDocsShow(id) {
+  plDocsSelected = id;
+  $$('#pl-docs-nav a').forEach(a => a.classList.toggle('active', a.dataset.anchor === id));
+  for (const [cat, items] of PL_DOCS.categories) {
+    for (const [aid, title, desc, sample] of items) {
+      if (aid !== id) continue;
+      $('#pl-docs-body').innerHTML = `
+        <h3>${esc(title)}</h3>
+        <p class="meta">${esc(desc)}</p>
+        <p><small>YAML shape:</small></p>
+        <pre><code>${esc(sample)}</code></pre>
+      `;
+      return;
+    }
+  }
+}
+
+// -- Wire-up ------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
-  const toggle = $('#pl-builder-toggle');
-  if (!toggle) return;
-  toggle.addEventListener('click', () => {
-    const b = $('#pl-builder');
-    b.hidden = !b.hidden;
-    if (!b.hidden) pbEmit();
+  if (!$('#pb-add-node')) return;   // Pipelines tab not on page — nothing to bind
+  $('#pb-add-node').addEventListener('click', pbAddNode);
+  $('#pb-delete-node').addEventListener('click', pbDeleteNode);
+  $('#pb-node-id').addEventListener('input', () => {
+    if (pbSelected < 0) return;
+    const old = pbJob.nodes[pbSelected].id;
+    const nu  = $('#pb-node-id').value.trim() || old;
+    pbJob.nodes[pbSelected].id = nu;
+    // Re-target any depends[] pointing at the old id.
+    for (const n of pbJob.nodes) n.depends = n.depends.map(d => d === old ? nu : d);
+    $('#pb-editor-title').textContent = 'node: ' + nu;
+    pbRenderNodeList(); pbRenderYaml();
   });
-  ['pb-job','pb-source-kind','pb-source-arg',
-   'pb-sink-mem','pb-sink-cnt','pb-sink-ndjson','pb-sink-kv','pb-sink-lucene']
-    .forEach(id => { const el = $('#' + id); if (el) el.addEventListener('input', pbEmit); });
-  $('#pb-add-filter').addEventListener('click', () => { pbSteps.push({kind:'filter', expr:''}); pbRender(); pbEmit(); });
-  $('#pb-add-project').addEventListener('click', () => { pbSteps.push({kind:'project', cols:''}); pbRender(); pbEmit(); });
-  $('#pb-add-setfield').addEventListener('click', () => { pbSteps.push({kind:'set-field', name:'', value:''}); pbRender(); pbEmit(); });
-  $('#pb-add-groovy').addEventListener('click', () => { pbSteps.push({kind:'groovy-map', script:''}); pbRender(); pbEmit(); });
-  $('#pb-emit').addEventListener('click', () => {
-    const y = pbEmit();
-    $('#pl-yaml').value = y;
-    $('#pb-status').textContent = 'loaded into editor · click ▶ Run above';
-    setTimeout(() => { $('#pb-status').textContent = ''; }, 3000);
+  $('#pb-job-id').addEventListener('input', () => {
+    pbJob.id = $('#pb-job-id').value.trim() || 'my-job';
+    pbRenderYaml();
+  });
+  document.querySelectorAll('.pb-add-step').forEach(b => b.addEventListener('click', () => {
+    if (pbSelected < 0) { pbStatus('no node selected', 'err'); return; }
+    const kind = b.dataset.kind;
+    const s = {kind};
+    (PB_STEP_KINDS[kind]?.fields || []).forEach(f => {
+      if (f.default !== undefined) s[f.name] = f.default;
+    });
+    pbJob.nodes[pbSelected].steps.push(s);
+    pbRenderEditor(); pbRenderYaml();
+  }));
+  document.querySelectorAll('.pb-add-sink').forEach(b => b.addEventListener('click', () => {
+    if (pbSelected < 0) { pbStatus('no node selected', 'err'); return; }
+    const kind = b.dataset.kind;
+    const s = {kind};
+    (PB_SINK_KINDS[kind]?.fields || []).forEach(f => {
+      if (f.default !== undefined) s[f.name] = f.default;
+    });
+    if (!s.name && kind !== 'counting' && kind !== 'ndjson-file' && kind !== 'nats') {
+      s.name = pbJob.nodes[pbSelected].id + '-' + kind;
+    }
+    pbJob.nodes[pbSelected].sinks.push(s);
+    pbRenderEditor(); pbRenderYaml();
+  }));
+  $('#pb-push-run').addEventListener('click', pbPushToRun);
+  $('#pb-load-yaml').addEventListener('click', pbLoadFromYaml);
+  $('#pb-copy-yaml').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(pbToYaml()); pbStatus('YAML copied', 'ok'); }
+    catch (e) { pbStatus('copy failed: ' + e.message, 'err'); }
   });
 });
 

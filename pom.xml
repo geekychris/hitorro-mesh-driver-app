@@ -241,6 +241,16 @@
              other pipelines-* adapters — ServiceLoader picks it up.
              Same aggressive exclusion set as the other hitorro deps in this
              pom — jsontypesystem transitively drags the NLP/hadoop tail. -->
+        <!-- hitorro-retrieval brings SearchProvider, CompositeSearchProvider,
+             mergers (RRF, Score, FieldSort), Remote/Streaming variants —
+             everything the FederatedRetrievalService needs to fan searches
+             across N fleet-retrieval instances. -->
+        <dependency>
+            <groupId>com.hitorro</groupId>
+            <artifactId>hitorro-retrieval</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-jvstype</artifactId>

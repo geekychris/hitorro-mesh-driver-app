@@ -733,6 +733,7 @@ public class MeshRestController {
             row.put("title", m.title());
             row.put("spdx", m.license() != null ? m.license().spdx() : null);
             row.put("kind", m.partitionBy() == null ? "broadcast" : "distributed");
+            row.put("category", DatasetCatalogController.categoryFor(m));
             row.put("primaryKey", m.record() != null ? m.record().primaryKey() : null);
             row.put("produces", m.identifiers() != null ? m.identifiers().produces() : List.of());
             row.put("maps",     m.identifiers() != null ? m.identifiers().maps()     : List.of());

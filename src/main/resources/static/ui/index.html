@@ -168,17 +168,59 @@
 
     <article>
       <header>
+        <span>Dataset catalog <span id="catalog-total-badge" class="badge">?</span></span>
+        <div>
+          <label class="meta" style="margin:0;font-size:0.8rem;">
+            <input type="checkbox" id="catalog-installed-only" style="margin:0 0.3rem 0 0;vertical-align:middle;">
+            Installed only
+          </label>
+        </div>
+      </header>
+      <p><small class="meta">Everything shippable with this mesh — grouped by category.
+        <span class="cat-legend-dot installed"></span> installed &amp; live at the agents ·
+        <span class="cat-legend-dot catalog"></span> catalog-only (not installed yet).
+        Click any dataset for schema, install command, and a jump to Playground.</small></p>
+      <div id="catalog-list">…</div>
+    </article>
+
+    <article>
+      <header>
         <span>Registered tables <span id="table-count-inline" class="badge">?</span></span>
         <div>
           <button id="add-table-btn" class="secondary outline" style="width:auto;margin:0;">+ Distributed table</button>
           <button id="add-broadcast-btn" class="secondary outline" style="width:auto;margin:0;">+ Broadcast</button>
         </div>
       </header>
-      <p><small class="meta">Click a table name to see its type + sample rows.
-        Distributed tables show partition keys; broadcasts show as
-        <span class="badge accent">broadcast</span>.</small></p>
+      <p><small class="meta">Runtime view — the tables actually loaded by the mesh right now.
+        Click a table to see its type + sample rows. Distributed tables show partition keys;
+        <span class="badge accent" title="Broadcast: same rows at every agent, JOINs stay local.">broadcast</span>
+        tables show that badge instead.</small></p>
       <div id="table-list">…</div>
     </article>
+
+    <!-- Dataset detail modal (opened from the catalog list above) -->
+    <dialog id="catalog-detail-dialog">
+      <article style="max-width:720px;">
+        <header>
+          <span>Dataset: <strong id="catalog-detail-name"></strong>
+                 <span id="catalog-detail-cat" class="badge accent"></span>
+                 <span id="catalog-detail-installed" class="badge"></span></span>
+          <button class="secondary outline" id="catalog-detail-close" style="width:auto;margin:0;">Close</button>
+        </header>
+        <p id="catalog-detail-desc" class="meta"></p>
+        <div id="catalog-detail-install-hint" hidden>
+          <p><small><b>Not installed.</b> Install with:</small></p>
+          <pre class="scroll" style="max-height:5rem;"><code id="catalog-detail-install-cmd"></code></pre>
+          <p><small class="meta">Runs the fetcher, writes rows to
+            <code>$HITORRO_DATASETS_HOME</code>, and registers the table with the driver.</small></p>
+        </div>
+        <div id="catalog-detail-schema"></div>
+        <footer>
+          <button id="catalog-detail-playground" class="secondary" style="width:auto;">Try in Playground</button>
+          <button id="catalog-detail-datasets"   class="secondary outline" style="width:auto;">Open in Datasets tab</button>
+        </footer>
+      </article>
+    </dialog>
 
     <!-- Add-distributed-table form -->
     <article id="add-table-panel" hidden>
@@ -608,119 +650,184 @@
 
   <!-- ================== PIPELINES ================== -->
   <section id="pipelines" class="tab-panel">
-    <div class="grid">
-      <!-- Left: bundled examples + job history -->
-      <article style="max-width: 22rem;">
+    <div class="tabs sub-tabs" role="tablist">
+      <button data-view="pl-build" class="active"
+              title="Multi-node DAG builder — node list on the left, typed forms on the right, live YAML preview at the bottom.">Build</button>
+      <button data-view="pl-run"
+              title="Load a bundled example (or pasted YAML) and run it locally in the driver or distributed across agents.">Run</button>
+      <button data-view="pl-history"
+              title="Pipeline runs history — status, timings, sink counts. Survives driver restart.">History</button>
+      <button data-view="pl-docs"
+              title="Every pipeline kind (source / step / reduce / sink) with YAML shape and one example each.">Docs</button>
+    </div>
+
+    <!-- ============ BUILD sub-tab ============ -->
+    <div id="pl-build" class="view active">
+      <div class="pb-layout">
+        <!-- Nodes list -->
+        <article class="pb-nodes-panel">
+          <header>
+            <span>Nodes <span id="pb-node-count" class="badge">0</span></span>
+            <button type="button" id="pb-add-node" class="secondary" style="width:auto;padding:0.15rem 0.7rem;">+ node</button>
+          </header>
+          <p><small class="meta">DAG top-down. Click to edit; drag/reorder-agnostic — dependencies wire via each node's <code>depends[]</code>.</small></p>
+          <ul id="pb-node-list" class="pb-node-list"></ul>
+          <hr>
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+            <label style="flex:1;">job id
+              <input type="text" id="pb-job-id" value="my-job" style="width:100%;font-family:ui-monospace,monospace;"/>
+            </label>
+          </div>
+          <div style="margin-top:0.6rem;display:flex;gap:0.4rem;">
+            <button type="button" id="pb-push-run" class="secondary" style="width:auto;padding:0.15rem 0.7rem;"
+                    title="Load the generated YAML into the Run tab's editor so you can run it (local or distributed).">↪ Send to Run tab</button>
+            <button type="button" id="pb-load-yaml" class="secondary outline" style="width:auto;padding:0.15rem 0.7rem;"
+                    title="Parse the YAML in the Run tab editor back into this builder.">↩ Load from YAML</button>
+          </div>
+          <span id="pb-status" class="meta" style="display:block;margin-top:0.4rem;"></span>
+        </article>
+
+        <!-- Selected-node editor -->
+        <article class="pb-editor-panel">
+          <header><span id="pb-editor-title">Select a node →</span>
+                  <button type="button" id="pb-delete-node" class="contrast outline" style="width:auto;padding:0.1rem 0.5rem;font-size:0.8rem;display:none;">✕ delete</button>
+          </header>
+          <div id="pb-editor-empty" class="meta">
+            <p>No node selected. Click <b>+ node</b> to start, or click a node on the left.</p>
+            <p><small>Every node is one <code>source → steps → reduce? → sinks</code> pipeline. Nodes can reference upstream nodes via <code>source: {kind: ref, node: …}</code> or through the explicit <code>depends: [id, …]</code> list.</small></p>
+          </div>
+          <div id="pb-editor" hidden>
+            <div class="pb-field-row"><label>node id</label>
+              <input type="text" id="pb-node-id" style="font-family:ui-monospace,monospace;flex:1;"/></div>
+
+            <div class="pb-field-row"><label>depends on</label>
+              <div id="pb-node-depends" class="pb-depends">(no other nodes yet)</div></div>
+
+            <details open>
+              <summary><b>source</b>  <small class="meta">where rows come from</small></summary>
+              <div id="pb-source-editor" class="pb-block"></div>
+            </details>
+
+            <details open>
+              <summary><b>steps</b>  <small class="meta">row-by-row transforms</small>
+                      <span style="float:right;">
+                        <button type="button" class="secondary outline pb-add-step" data-kind="filter"      style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ filter</button>
+                        <button type="button" class="secondary outline pb-add-step" data-kind="project"     style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ project</button>
+                        <button type="button" class="secondary outline pb-add-step" data-kind="set-field"   style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ set-field</button>
+                        <button type="button" class="secondary outline pb-add-step" data-kind="groovy-map"  style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ groovy</button>
+                        <button type="button" class="secondary outline pb-add-step" data-kind="jvs-enrich"  style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ jvs-enrich</button>
+                        <button type="button" class="secondary outline pb-add-step" data-kind="jvs-translate" style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ jvs-translate</button>
+                      </span></summary>
+              <div id="pb-steps-editor" class="pb-block"></div>
+            </details>
+
+            <details>
+              <summary><b>reduce</b>  <small class="meta">group-by + aggregations</small>
+                      <span style="float:right;"><label class="meta"><input type="checkbox" id="pb-reduce-enable"/> enable</label></span></summary>
+              <div id="pb-reduce-editor" class="pb-block"></div>
+            </details>
+
+            <details open>
+              <summary><b>sinks</b>  <small class="meta">where rows land</small>
+                      <span style="float:right;">
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="memory-table" style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ memory</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="counting"     style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ counting</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="ndjson-file"  style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ ndjson</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="kvstore"      style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ kv</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="lucene"       style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ lucene</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="jvs-lucene"   style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ jvs-lucene</button>
+                        <button type="button" class="secondary outline pb-add-sink" data-kind="nats"         style="padding:0.05rem 0.4rem;font-size:0.75rem;">+ nats</button>
+                      </span></summary>
+              <div id="pb-sinks-editor" class="pb-block"></div>
+            </details>
+          </div>
+        </article>
+      </div>
+
+      <article style="margin-top:0.75rem;">
         <header>
-          <span>Bundled examples</span>
-          <small class="meta" title="Each row is a shipped example job spec (YAML) — click to load it into the editor at the right, then click ▶ Run.">click a row to load its YAML into the editor →</small>
+          <span>Live YAML</span>
+          <small class="meta" style="flex:1;">regenerated on every edit · valid = matches <code>JobSpec</code></small>
+          <button type="button" id="pb-copy-yaml" class="secondary outline" style="width:auto;padding:0.1rem 0.5rem;">📋 copy</button>
         </header>
-        <div id="pl-examples" class="ds-list" title="Click any row to load its YAML.">loading…</div>
-      </article>
-
-      <!-- Right: editor + status -->
-      <article>
-        <header>
-          <span>Job spec (YAML)</span>
-          <span style="flex:1"></span>
-          <button id="pl-builder-toggle" type="button" class="secondary outline"
-                  title="Open a form-based YAML composer — pick source, add steps, tick sinks; generates YAML into the editor."
-                  style="margin:0 0.4rem 0 0; padding:0.15rem 0.7rem;">🧱 Builder</button>
-          <button id="pl-run" type="button"
-                  title="Local Run — pipeline executes IN the driver JVM (Phase 1). Simplest path; use this for quick tests. Auto-loads a bundled example if the editor is empty."
-                  style="margin:0 0.4rem 0 0; padding:0.15rem 0.9rem;">▶ Run</button>
-          <button id="pl-run-dist" type="button" class="secondary"
-                  title="Distributed Run — the driver's PipelineScheduler dispatches each node to a mesh agent advertising the pipeline-node capability. Nodes run ON the agents (parallel across hosts) instead of on the driver."
-                  style="margin:0;padding:0.15rem 0.9rem; background: var(--accent-mesh); border-color: var(--accent-mesh);">
-            ▶ Run distributed
-          </button>
-        </header>
-
-        <!-- Form-based builder — hidden until toggled. Emits YAML into the
-             editor below every time a control changes. -->
-        <div id="pl-builder" class="pl-builder" hidden>
-          <div class="pl-builder-row">
-            <label>job id</label>
-            <input id="pb-job" type="text" value="my-job" style="flex:1"/>
-          </div>
-          <div class="pl-builder-row">
-            <label>source</label>
-            <select id="pb-source-kind">
-              <option value="inline">inline — rows literal in spec</option>
-              <option value="ndjson-file">ndjson-file — one JSON per line (local/gz)</option>
-              <option value="json-file">json-file — top-level array</option>
-              <option value="csv-file">csv-file — header row, strings</option>
-              <option value="sql">sql — run a mesh query and stream its rows</option>
-              <option value="kvstore">kvstore — read from a RocksDB store</option>
-              <option value="lucene">lucene index — full-text search results</option>
-              <option value="nats">nats — subscribe to a subject (streaming)</option>
-              <option value="kafka">kafka — consume a topic (streaming)</option>
-            </select>
-            <input id="pb-source-arg" type="text" placeholder="url / SQL / subject / topic / store-name" style="flex:1"/>
-          </div>
-          <div class="pl-builder-row" style="margin-top:-0.2rem;">
-            <label></label>
-            <small class="meta" id="pb-source-help">
-              inline: leave blank — a 2-row {msg:hello} sample is generated.
-            </small>
-          </div>
-          <div id="pb-steps"></div>
-          <div class="pl-builder-row">
-            <button type="button" class="secondary outline" id="pb-add-filter"
-                    style="padding:0.15rem 0.5rem;">+ filter</button>
-            <button type="button" class="secondary outline" id="pb-add-project"
-                    style="padding:0.15rem 0.5rem;">+ project</button>
-            <button type="button" class="secondary outline" id="pb-add-setfield"
-                    style="padding:0.15rem 0.5rem;">+ set-field</button>
-            <button type="button" class="secondary outline" id="pb-add-groovy"
-                    style="padding:0.15rem 0.5rem;">+ groovy-map</button>
-          </div>
-          <div class="pl-builder-row">
-            <label>sinks</label>
-            <label><input type="checkbox" id="pb-sink-mem" checked/> memory-table (in-process)</label>
-            <label><input type="checkbox" id="pb-sink-cnt" checked/> counting</label>
-            <label><input type="checkbox" id="pb-sink-ndjson"/> ndjson-file</label>
-            <label><input type="checkbox" id="pb-sink-kv"/> kvstore (RocksDB)</label>
-            <label><input type="checkbox" id="pb-sink-lucene"/> lucene index</label>
-            <label><input type="checkbox" id="pb-sink-nats"/> nats subject</label>
-          </div>
-          <div class="pl-builder-row">
-            <button type="button" id="pb-emit" style="padding:0.15rem 0.9rem;">↓ Build & load into editor</button>
-            <span id="pb-status" class="meta"></span>
-          </div>
-          <details style="margin-top:0.5rem;">
-            <summary class="meta">Preview YAML</summary>
-            <div id="pb-preview" class="pl-builder-yaml">(nothing built yet)</div>
-          </details>
-        </div>
-
-        <textarea id="pl-yaml" rows="12"
-                  title="YAML job spec. Click a bundled example on the left to auto-fill, or use 🧱 Builder above."
-                  style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
-
-        <div id="pl-status" hidden style="margin-top: 0.75rem;">
-          <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <strong>Job:</strong> <code id="pl-status-id"></code>
-            <span id="pl-status-state" class="badge"></span>
-            <span style="flex:1"></span>
-            <small id="pl-status-timing" class="meta"></small>
-          </div>
-          <div id="pl-dag" style="margin-top: 0.5rem;"></div>
-          <details style="margin-top: 0.5rem;">
-            <summary class="meta">Progress events</summary>
-            <div id="pl-events" style="font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 12rem; overflow-y: auto;"></div>
-          </details>
-        </div>
+        <pre id="pb-yaml-preview" class="pb-yaml"><code>(add a node to start)</code></pre>
       </article>
     </div>
 
-    <article>
-      <header>
-        <span>Active + recent runs</span>
-        <small class="meta">auto-refreshes every second while any job is running · click a card to jump to it</small>
-      </header>
-      <div id="pl-runs" class="pl-runs-grid">no runs yet</div>
-    </article>
+    <!-- ============ RUN sub-tab ============ -->
+    <div id="pl-run" class="view">
+      <div class="grid">
+        <article style="max-width: 22rem;">
+          <header>
+            <span>Bundled examples</span>
+            <small class="meta" title="Each row is a shipped example job spec (YAML) — click to load it into the editor at the right, then click ▶ Run.">click a row to load →</small>
+          </header>
+          <div id="pl-examples" class="ds-list" title="Click any row to load its YAML.">loading…</div>
+        </article>
+
+        <article>
+          <header>
+            <span>Job spec (YAML)</span>
+            <span style="flex:1"></span>
+            <button id="pl-run" type="button"
+                    title="Local Run — pipeline executes IN the driver JVM. Auto-loads a bundled example if the editor is empty."
+                    style="margin:0 0.4rem 0 0; padding:0.15rem 0.9rem;">▶ Run</button>
+            <button id="pl-run-dist" type="button" class="secondary"
+                    title="Distributed Run — the driver's PipelineScheduler dispatches each node to a mesh agent advertising the pipeline-node capability."
+                    style="margin:0;padding:0.15rem 0.9rem; background: var(--accent-mesh); border-color: var(--accent-mesh);">
+              ▶ Run distributed
+            </button>
+          </header>
+          <textarea id="pl-yaml" rows="18"
+                    title="YAML job spec. Click a bundled example on the left, or build one in the Build sub-tab."
+                    style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
+
+          <div id="pl-status" hidden style="margin-top: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <strong>Job:</strong> <code id="pl-status-id"></code>
+              <span id="pl-status-state" class="badge"></span>
+              <span style="flex:1"></span>
+              <small id="pl-status-timing" class="meta"></small>
+            </div>
+            <div id="pl-dag" style="margin-top: 0.5rem;"></div>
+            <details style="margin-top: 0.5rem;">
+              <summary class="meta">Progress events</summary>
+              <div id="pl-events" style="font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 12rem; overflow-y: auto;"></div>
+            </details>
+          </div>
+        </article>
+      </div>
+
+      <article>
+        <header>
+          <span>Active + recent runs</span>
+          <small class="meta">auto-refreshes every second while any job is running</small>
+        </header>
+        <div id="pl-runs" class="pl-runs-grid">no runs yet</div>
+      </article>
+    </div>
+
+    <!-- ============ HISTORY sub-tab ============ -->
+    <div id="pl-history" class="view">
+      <article>
+        <header>
+          <span>Pipeline run history <span id="pl-history-count" class="badge">?</span></span>
+          <small class="meta">newest first · click a row to see the DAG + per-node stats</small>
+        </header>
+        <div id="pl-history-list">loading…</div>
+      </article>
+    </div>
+
+    <!-- ============ DOCS sub-tab ============ -->
+    <div id="pl-docs" class="view">
+      <div class="grid">
+        <article style="max-width: 14rem;">
+          <header><span>Reference</span></header>
+          <nav id="pl-docs-nav" class="pl-docs-nav">loading…</nav>
+        </article>
+        <article><div id="pl-docs-body" class="pl-docs-body">select a kind →</div></article>
+      </div>
+    </div>
   </section>
 
   <!-- ================== SEARCH ================== -->
