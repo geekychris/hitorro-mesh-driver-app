@@ -1323,9 +1323,14 @@ async function syncOneDataset(datasetId) {
     const r = await api('/mesh/storage/minio/sync?dataset=' + encodeURIComponent(datasetId),
                         { method: 'POST' });
     if (!r.success) throw new Error(r.error || 'sync failed');
-    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)}</span>`;
+    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)} — refreshing matrix…</span>`;
+    // Wait a beat for MinIO to reflect the just-uploaded objects in a
+    // subsequent list — mc mirror is synchronous but the bucket list
+    // occasionally lags on the very-fresh listing.
+    await new Promise(r => setTimeout(r, 500));
     const storage = await api('/mesh/storage');
     renderStorage(storage);
+    if (msg) msg.innerHTML = `<span style="color:var(--success)">✓ synced ${esc(datasetId)}</span>`;
   } catch (e) {
     if (msg) msg.innerHTML = `<span style="color:var(--danger)">${esc(e.message || e)}</span>`;
   }
@@ -1345,6 +1350,11 @@ async function minioAction(action) {
     if (r.success === false) throw new Error(r.error || 'failed');
     if (msg) msg.innerHTML = `<span style="color:var(--success)">${action} ok</span>`
       + (r.alreadyRunning ? ' <span class="meta">(was already up)</span>' : '');
+    // MinIO's bucket listing can lag by a few hundred ms after a fresh
+    // sync writes; short pause so the matrix refresh actually sees them.
+    if (action === 'sync' || action === 'start') {
+      await new Promise(r => setTimeout(r, 500));
+    }
     // Reload full storage panel so the S3 line + browser refresh.
     const storage = await api('/mesh/storage');
     renderStorage(storage);
@@ -1839,7 +1849,12 @@ async function refreshRuntimeTablesPanel() {
         <tbody>
           ${rows.map(r => `
             <tr>
-              <td style="padding:0.15rem 0.4rem;"><code>${esc(r.name)}</code></td>
+              <td style="padding:0.15rem 0.4rem;">
+                <a href="#" class="runtime-detail" data-name="${esc(r.name)}"
+                   title="Show schema, sample rows, and agent fan-out for ${esc(r.name)}">
+                  <code>${esc(r.name)}</code>
+                </a>
+              </td>
               <td style="padding:0.15rem 0.4rem;">${esc(r.format)}</td>
               <td style="padding:0.15rem 0.4rem;font-family:ui-monospace,monospace;font-size:0.78rem;color:#555;">${esc(r.uri)}</td>
               <td style="padding:0.15rem 0.4rem;text-align:center;">${r.agentsNotified}</td>
@@ -1865,9 +1880,107 @@ async function refreshRuntimeTablesPanel() {
         ev.preventDefault();
         setSql('SELECT * FROM ' + a.dataset.name + ' LIMIT 100');
       }));
+    // Clicking the table name opens the detail modal.
+    target.querySelectorAll('.runtime-detail').forEach(a =>
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        openRuntimeTableDetail(a.dataset.name);
+      }));
   } catch (e) {
     target.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
   }
+}
+
+/** Open the runtime-table detail modal — fetches:
+ *   1. the tracker entry for schema/uri/timestamp,
+ *   2. SELECT * FROM &lt;name&gt; LIMIT 20 for a data sample,
+ *   3. /mesh/agents to show which agents received the fan-out.
+ *  All three run concurrently; the modal renders whatever came back. */
+async function openRuntimeTableDetail(name) {
+  const dlg = $('#runtime-table-dialog');
+  const title = $('#runtime-table-title');
+  const body = $('#runtime-table-body');
+  if (!dlg || !title || !body) return;
+  title.textContent = 'Table: ' + name;
+  body.innerHTML = '<small class="meta">loading…</small>';
+  dlg.showModal();
+
+  const [entryRes, sampleRes, agentsRes] = await Promise.allSettled([
+    api('/mesh/queries/registered').then(rows => rows.find(r => r.name === name)),
+    api('/mesh/queries', {
+      method: 'POST', headers: {'content-type':'application/json'},
+      body: JSON.stringify({sql: 'SELECT * FROM ' + name + ' LIMIT 20', timeoutMs: 10000}),
+    }),
+    api('/mesh/agents'),
+  ]);
+
+  const entry = entryRes.status === 'fulfilled' ? entryRes.value : null;
+  const sample = sampleRes.status === 'fulfilled' ? sampleRes.value : {rows: [], error: sampleRes.reason?.message};
+  const agents = agentsRes.status === 'fulfilled' ? (agentsRes.value || []) : [];
+
+  let schemaHtml = '<em>no tracker entry (perhaps registered before driver restart)</em>';
+  if (entry) {
+    let fields = [];
+    try { fields = JSON.parse(entry.typeJson).fields || []; } catch (_) {}
+    schemaHtml = `
+      <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
+        <thead><tr>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">field</th>
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;">type</th>
+        </tr></thead>
+        <tbody>${fields.map(f => `
+          <tr>
+            <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;"><code>${esc(f.name)}</code></td>
+            <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${esc(f.type)}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+  }
+
+  const sampleRows = sample.rows || [];
+  let sampleHtml;
+  if (sample.error) {
+    sampleHtml = `<span style="color:var(--danger)">${esc(sample.error || 'sample failed')}</span>`;
+  } else if (!sampleRows.length) {
+    sampleHtml = '<em>no rows returned</em>';
+  } else {
+    const cols = Object.keys(sampleRows[0]);
+    sampleHtml = `
+      <div class="scroll" style="max-height:20rem;overflow:auto;">
+      <table style="width:100%;font-size:0.78rem;border-collapse:collapse;">
+        <thead><tr>${cols.map(c => `
+          <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;">${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${sampleRows.map(r => `<tr>${cols.map(c => `
+          <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">${esc(String(r[c] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  const jvsqlAgents = agents.filter(a => (a.capabilities || []).includes('jvssql'));
+
+  body.innerHTML = `
+    <section style="margin-top:0.4rem;">
+      <h4 style="margin:0 0 0.3rem;">Metadata</h4>
+      <table style="font-size:0.8rem;">
+        <tr><td class="meta">uri</td><td><code>${esc(entry?.uri || '?')}</code></td></tr>
+        <tr><td class="meta">format</td><td>${esc(entry?.format || '?')}</td></tr>
+        <tr><td class="meta">broadcast</td><td>${entry?.broadcast ? 'yes' : 'no'}</td></tr>
+        <tr><td class="meta">registered at</td><td>${esc(entry?.registeredAt || '?')}</td></tr>
+        <tr><td class="meta">agents notified (at fan-out)</td><td>${entry?.agentsNotified ?? '?'}</td></tr>
+      </table>
+    </section>
+    <section style="margin-top:0.6rem;">
+      <h4 style="margin:0 0 0.3rem;">Schema <span class="meta">— induced from first row</span></h4>
+      ${schemaHtml}
+    </section>
+    <section style="margin-top:0.6rem;">
+      <h4 style="margin:0 0 0.3rem;">Sample rows <span class="meta">— SELECT * LIMIT 20</span></h4>
+      ${sampleHtml}
+    </section>
+    <section style="margin-top:0.6rem;">
+      <h4 style="margin:0 0 0.3rem;">Live jvssql agents <span class="meta">— eligible to serve</span></h4>
+      <ul style="margin:0;padding-left:1.2rem;">
+        ${jvsqlAgents.length ? jvsqlAgents.map(a => `<li><code>${esc(a.agentId)}</code></li>`).join('') : '<li><em>none</em></li>'}
+      </ul>
+    </section>`;
 }
 
 async function unregisterRuntimeTable(name) {
@@ -2973,7 +3086,7 @@ function wireFleetHandlers() {
     refresh._wired = true;
     refresh.addEventListener('click', loadFleetServices);
   }
-  ['fleet-log-close', 'fleet-manifest-close'].forEach(id => {
+  ['fleet-log-close', 'fleet-manifest-close', 'runtime-table-close'].forEach(id => {
     const b = $('#' + id);
     if (b && !b._wired) { b._wired = true; b.addEventListener('click', () => b.closest('dialog').close()); }
   });
