@@ -3,6 +3,8 @@
  */
 package com.hitorro.mesh.driver.app.storage;
 
+import com.hitorro.mesh.EnableS3Message;
+import com.hitorro.mesh.driver.MeshDriver;
 import com.hitorro.util.basefile.fs.BaseFileSystem;
 import com.hitorro.util.basefile.fs.s3.MinioProtocolAdapter;
 import org.slf4j.Logger;
@@ -64,12 +66,16 @@ public class MinioLifecycleService {
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2)).build();
 
+    private final ObjectProvider<MeshDriver> driverProvider;
+
     public MinioLifecycleService(ConfigurableApplicationContext ctx,
                                  Environment env,
-                                 ObjectProvider<MinioProtocolAdapter> bootAdapter) {
+                                 ObjectProvider<MinioProtocolAdapter> bootAdapter,
+                                 ObjectProvider<MeshDriver> driverProvider) {
         this.ctx = ctx;
         this.env = env;
         this.bootAdapter = bootAdapter;
+        this.driverProvider = driverProvider;
     }
 
     public Map<String, Object> status() {
@@ -136,11 +142,49 @@ public class MinioLifecycleService {
         BaseFileSystem.addProtocolAdapter(a);
         registerSingleton(a);
 
+        // Fan out to every live agent — one click enables the whole mesh.
+        // Agents subscribe on Subjects.agentControlEnableS3() in
+        // S3AdapterInstaller and install the adapter the same way.
+        MeshDriver driver = driverProvider.getIfAvailable();
+        int agentsNotified = 0;
+        if (driver != null) {
+            try {
+                driver.publishEnableS3(new EnableS3Message(endpoint, bucket, access, secret, false));
+                agentsNotified = driver.agents().agentsWith(java.util.List.of("jvssql")).size();
+                log.info("mesh: broadcast enable-s3 to {} live agent(s)", agentsNotified);
+            } catch (Exception e) {
+                log.warn("mesh: enable-s3 broadcast failed: {}", e.toString());
+            }
+        }
+
         out.put("endpoint", endpoint);
         out.put("bucket", bucket);
         out.put("reachable", true);
         out.put("adapterRegistered", true);
+        out.put("agentsNotified", agentsNotified);
         out.put("alreadyRunning", alreadyUp);
+        return out;
+    }
+
+    /**
+     * Sync local datasets → MinIO by shelling out to
+     * {@code minio-sync-datasets.sh}. Requires the container to be up.
+     * Prints the script output so the caller can see per-dataset progress
+     * (the script uses {@code mc mirror} which reports bytes/files).
+     */
+    public Map<String, Object> sync() throws IOException, InterruptedException {
+        Map<String, Object> out = new LinkedHashMap<>();
+        File dir = findScriptsDir();
+        if (dir == null) throw new IllegalStateException("MinIO scripts dir not found.");
+        if (!ping(resolveEndpoint())) {
+            throw new IllegalStateException("MinIO not reachable at " + resolveEndpoint()
+                    + " — click Start first.");
+        }
+        List<String> stdout = new ArrayList<>();
+        int rc = runScript(dir, "minio-sync-datasets.sh", stdout);
+        out.put("scriptExitCode", rc);
+        out.put("scriptOutput", String.join("\n", stdout));
+        out.put("success", rc == 0);
         return out;
     }
 

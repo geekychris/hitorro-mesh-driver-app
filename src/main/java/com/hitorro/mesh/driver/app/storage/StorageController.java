@@ -51,4 +51,24 @@ public class StorageController {
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
         }
     }
+
+    /**
+     * Head-of-file preview — first {@code lines} lines (default 20, capped
+     * at 500) or {@code bytes} bytes (default 16KB, capped at 256KB),
+     * whichever comes first. Parquet files return their Avro schema
+     * instead of raw bytes.
+     */
+    @GetMapping("/head")
+    public ResponseEntity<Map<String, Object>> head(
+            @RequestParam(name = "path") String path,
+            @RequestParam(name = "lines", defaultValue = "20") int lines,
+            @RequestParam(name = "bytes", defaultValue = "16384") int bytes) {
+        try {
+            return ResponseEntity.ok(storage.head(path, lines, bytes));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
 }

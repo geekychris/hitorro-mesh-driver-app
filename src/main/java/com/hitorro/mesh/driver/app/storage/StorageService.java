@@ -164,6 +164,80 @@ public class StorageService {
      * }
      * </pre></p>
      */
+    /**
+     * Head-of-file preview — read the first {@code maxLines} lines (or
+     * ~64KB, whichever comes first) via {@link BaseFileSystem} so any URI
+     * scheme works uniformly. Text-oriented: intended for NDJson, CSV,
+     * JSON, TSV. Binary files (Parquet, gzip w/o text extension) get a
+     * best-effort peek at the first bytes rendered as UTF-8 with a
+     * "possibly binary" flag when the raw bytes fail to decode as text.
+     */
+    public Map<String, Object> head(String path, int maxLines, int maxBytes) throws Exception {
+        String resolved = resolveBrowsePath(path);
+        BaseFile bf = BaseFileSystem.getBaseFileFromPath(resolved);
+        if (bf == null || !bf.exists()) {
+            throw new IllegalArgumentException("path not found: " + resolved);
+        }
+        if (bf.isDir()) {
+            throw new IllegalArgumentException("not a file: " + resolved);
+        }
+        int lineCap = Math.max(1, Math.min(maxLines, 500));
+        int byteCap = Math.max(256, Math.min(maxBytes, 262_144));  // 256 KB cap
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("path", path == null ? "" : path);
+        out.put("resolved", resolved);
+        out.put("size", safeLength(bf));
+
+        // Parquet: return the Avro schema instead of raw bytes — much
+        // more useful than a hex dump of the file header.
+        if (resolved.toLowerCase().endsWith(".parquet")) {
+            out.put("kind", "parquet");
+            out.put("preview", parquetPeek(resolved));
+            return out;
+        }
+
+        // Text-oriented preview via BaseFile (handles .gz/.bz2/.zstd via
+        // extension). Read into a small buffer, split on newlines.
+        StringBuilder sb = new StringBuilder();
+        int lines = 0;
+        boolean truncated = false;
+        try (java.io.InputStream is = bf.getInputStream();
+             java.io.BufferedReader r = new java.io.BufferedReader(
+                     new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null && lines < lineCap && sb.length() < byteCap) {
+                sb.append(line).append('\n');
+                lines++;
+            }
+            if (line != null || sb.length() >= byteCap) truncated = true;
+        }
+        out.put("kind", "text");
+        out.put("lines", lines);
+        out.put("truncated", truncated);
+        out.put("preview", sb.toString());
+        return out;
+    }
+
+    /** Best-effort Parquet header inspection — returns the Avro schema
+     *  as a pretty JSON string, plus a row count if cheap to obtain. */
+    private static String parquetPeek(String uri) {
+        try {
+            String u = uri.startsWith("s3://") ? "s3a://" + uri.substring(5) : uri;
+            org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
+            conf.set("fs.s3a.path.style.access", "true");
+            try (org.apache.parquet.hadoop.ParquetFileReader reader =
+                    org.apache.parquet.hadoop.ParquetFileReader.open(
+                            org.apache.parquet.hadoop.util.HadoopInputFile.fromPath(
+                                    new org.apache.hadoop.fs.Path(u), conf))) {
+                org.apache.parquet.hadoop.metadata.ParquetMetadata md = reader.getFooter();
+                return "schema:\n" + md.getFileMetaData().getSchema().toString()
+                        + "\n\nrows: " + reader.getRecordCount();
+            }
+        } catch (Exception e) {
+            return "(parquet peek failed: " + e.getMessage() + ")";
+        }
+    }
+
     public Map<String, Object> browse(String path) throws Exception {
         String resolved = resolveBrowsePath(path);
         BaseFile bf = BaseFileSystem.getBaseFileFromPath(resolved);

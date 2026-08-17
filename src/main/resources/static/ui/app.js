@@ -1001,6 +1001,7 @@ function renderStorage(s) {
     <span class="meta">MinIO lifecycle</span>
     <span id="minio-status-badge" class="badge">…</span>
     <button id="minio-start-btn" class="secondary" style="margin-left:0.5rem;">▶ Start MinIO</button>
+    <button id="minio-sync-btn"  class="secondary">↻ Sync datasets</button>
     <button id="minio-stop-btn"  class="secondary">■ Stop</button>
     <div id="minio-status-detail" class="meta"
          style="font-family:ui-monospace,monospace;font-size:0.75rem;margin-top:0.3rem;"></div>
@@ -1010,6 +1011,7 @@ function renderStorage(s) {
 
   // Wire lifecycle controls after the innerHTML swap.
   $('#minio-start-btn').addEventListener('click', () => minioAction('start'));
+  $('#minio-sync-btn').addEventListener('click', () => minioAction('sync'));
   $('#minio-stop-btn').addEventListener('click', () => minioAction('stop'));
   refreshMinioStatus();
 
@@ -1117,27 +1119,70 @@ async function browseStorage(path) {
         <tr>
           <td style="padding:0.15rem 0.4rem;">
             ${e.isDir
-              ? `<a href="#" data-path="${esc(joinPath(resolved, e.name))}">📁 ${esc(e.name)}/</a>`
-              : `📄 ${esc(e.name)}`}
+              ? `<a href="#" data-path="${esc(joinPath(resolved, e.name))}" data-kind="dir">📁 ${esc(e.name)}/</a>`
+              : `<a href="#" data-path="${esc(joinFile(resolved, e.name))}" data-kind="file">📄 ${esc(e.name)}</a>`}
           </td>
           <td style="padding:0.15rem 0.4rem;text-align:right;color:#888;">
             ${e.isDir ? '' : humanBytes(e.size)}
           </td>
         </tr>`).join('')}
-      </tbody></table>`;
+      </tbody></table>
+      <div id="storage-preview" style="display:none;margin-top:0.5rem;"></div>`;
     entriesEl.querySelectorAll('a[data-path]').forEach(a =>
       a.addEventListener('click', ev => {
         ev.preventDefault();
-        browseStorage(a.dataset.path);
+        if (a.dataset.kind === 'dir') browseStorage(a.dataset.path);
+        else previewStorageFile(a.dataset.path);
       }));
   } catch (e) {
     entriesEl.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
   }
 }
 
-/** Join a base URI with a child name — handles s3:// and file:/ uniformly. */
+/** Join a base URI with a child dir name — trailing '/' matters. */
 function joinPath(base, name) {
   return base.endsWith('/') ? base + name + '/' : base + '/' + name + '/';
+}
+
+/** Same as joinPath but for a file — NO trailing '/' (which would be
+ *  read as a dir by the S3 adapter). */
+function joinFile(base, name) {
+  return base.endsWith('/') ? base + name : base + '/' + name;
+}
+
+/** Fetch and render a head-of-file preview inline under the entries
+ *  table. Parquet returns Avro schema, everything else returns text.
+ *  Kept scoped to the current browser state — clicking another file
+ *  replaces the preview; clicking away closes it. */
+async function previewStorageFile(fileUri) {
+  const target = $('#storage-preview');
+  if (!target) return;
+  target.style.display = 'block';
+  target.innerHTML = `<small class="meta">loading preview of <code>${esc(fileUri)}</code>…</small>`;
+  try {
+    const r = await api('/mesh/storage/head?path=' + encodeURIComponent(fileUri) + '&lines=25');
+    if (r.error) throw new Error(r.error);
+    const langHint = r.kind === 'parquet' ? '' : ' language-json';
+    target.innerHTML = `
+      <div style="border:1px solid #d5d5d5;border-radius:4px;padding:0.5rem;background:#fafafa;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <b>📄 ${esc(fileUri)}</b>
+          <span class="meta" style="font-size:0.75rem;">
+            ${r.kind} · ${humanBytes(r.size || 0)}
+            ${r.truncated ? ' · truncated' : ''}
+            <a href="#" id="storage-preview-close" style="margin-left:0.5rem;">✕ close</a>
+          </span>
+        </div>
+        <pre class="scroll${langHint}" style="margin:0.4rem 0 0;max-height:24rem;overflow:auto;font-size:0.78rem;">${esc(r.preview || '')}</pre>
+      </div>`;
+    $('#storage-preview-close')?.addEventListener('click', ev => {
+      ev.preventDefault();
+      target.style.display = 'none';
+      target.innerHTML = '';
+    });
+  } catch (e) {
+    target.innerHTML = `<small style="color:var(--danger)">preview failed: ${esc(e.message || e)}</small>`;
+  }
 }
 
 /** Refresh the MinIO status pill + detail line without touching the rest of
@@ -1154,8 +1199,10 @@ async function refreshMinioStatus() {
     const up = !!s.reachable;
     badge.textContent = up ? 'running' : (s.dockerAvailable ? 'stopped' : 'docker missing');
     badge.className = 'badge ' + (up ? 'success' : (s.dockerAvailable ? 'warning' : 'danger'));
+    const syncB = $('#minio-sync-btn');
     startB.disabled = up || !s.dockerAvailable;
     stopB.disabled  = !up || !s.dockerAvailable;
+    if (syncB) syncB.disabled = !up;
     detail.innerHTML = up
       ? `endpoint <code>${esc(s.endpoint)}</code> · bucket <code>${esc(s.bucket)}</code>`
         + ` · console <a href="${esc(s.consoleUrl)}" target="_blank">${esc(s.consoleUrl)}</a>`

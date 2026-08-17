@@ -54,6 +54,21 @@ public class MinioLifecycleController {
         }
     }
 
+    @PostMapping("/sync")
+    public ResponseEntity<Map<String, Object>> sync() {
+        try {
+            return ResponseEntity.ok(svc.sync());
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
+        } catch (Exception e) {
+            log.warn("minio sync failed", e);
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("success", false);
+            err.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(err);
+        }
+    }
+
     @PostMapping("/stop")
     public ResponseEntity<Map<String, Object>> stop() {
         try {
