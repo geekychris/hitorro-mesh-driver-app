@@ -52,10 +52,33 @@ public class RuntimeTableTracker {
             boolean broadcast,
             String partitionKey,
             int agentsNotified,
-            String registeredAt) { }
+            String registeredAt,
+            /** Target agent for per-partition registrations. null for
+             *  broadcast + non-partitioned distributed. */
+            String targetAgentId,
+            /** True when the operator supplied an explicit agentId on
+             *  register — reconciler will NOT re-hash these on drop. */
+            boolean explicitTarget) {
 
-    private final Map<String, Entry> byName = new LinkedHashMap<>();
+        /** 8-arg back-compat ctor for on-disk snapshots from earlier
+         *  driver versions — null targetAgentId, explicitTarget=false. */
+        public Entry(String name, String uri, String format, String typeJson,
+                     boolean broadcast, String partitionKey,
+                     int agentsNotified, String registeredAt) {
+            this(name, uri, format, typeJson, broadcast, partitionKey,
+                 agentsNotified, registeredAt, null, false);
+        }
+    }
+
+    /** Keyed by name (broadcast) or name+"@"+partitionKey (partitioned).
+     *  Multiple partitions of the same table live as distinct entries — the
+     *  previous "keyed by name only" scheme silently overwrote them. */
+    private final Map<String, Entry> byKey = new LinkedHashMap<>();
     private final Path file;
+
+    private static String key(String name, String partitionKey) {
+        return partitionKey == null ? name : name + "@" + partitionKey;
+    }
 
     public RuntimeTableTracker() {
         String home = System.getProperty("hitorro.driver.home",
@@ -72,30 +95,48 @@ public class RuntimeTableTracker {
         try {
             String json = Files.readString(file, StandardCharsets.UTF_8);
             List<Entry> loaded = MAPPER.readValue(json, new TypeReference<List<Entry>>() {});
-            for (Entry e : loaded) byName.put(e.name(), e);
-            log.info("runtime-tables: loaded {} entries from {}", byName.size(), file);
+            for (Entry e : loaded) byKey.put(key(e.name(), e.partitionKey()), e);
+            log.info("runtime-tables: loaded {} entries from {}", byKey.size(), file);
         } catch (Exception e) {
             log.warn("runtime-tables: load failed ({}): {}", file, e.toString());
         }
     }
 
+    /** Back-compat overload — no explicit target-agent info. */
     public synchronized void record(RegisterTableMessage msg, int agentsNotified) {
-        byName.put(msg.name(), new Entry(
+        record(msg, agentsNotified, /*targetAgentId=*/null, /*explicitTarget=*/false);
+    }
+
+    /** Full record — used by register-partitioned to preserve
+     *  targetAgentId + whether the operator supplied it explicitly. */
+    public synchronized void record(RegisterTableMessage msg, int agentsNotified,
+                                    String targetAgentId, boolean explicitTarget) {
+        Entry e = new Entry(
                 msg.name(), msg.uri(), msg.format(), msg.typeJson(),
                 msg.broadcast(), msg.partitionKey(),
-                agentsNotified, Instant.now().toString()));
+                agentsNotified, Instant.now().toString(),
+                targetAgentId, explicitTarget);
+        byKey.put(key(msg.name(), msg.partitionKey()), e);
         persist();
     }
 
+    /** Drop every entry for the given table name (all partitions). */
     public synchronized void forget(String name) {
-        if (byName.remove(name) != null) persist();
+        boolean any = byKey.keySet().removeIf(k -> k.equals(name) || k.startsWith(name + "@"));
+        if (any) persist();
+    }
+
+    /** Drop a specific (name, partitionKey) entry — used by the
+     *  reconciler when re-hashing to a new target. */
+    public synchronized void forget(String name, String partitionKey) {
+        if (byKey.remove(key(name, partitionKey)) != null) persist();
     }
 
     public synchronized List<Entry> snapshot() {
-        return new ArrayList<>(byName.values());
+        return new ArrayList<>(byKey.values());
     }
 
-    public synchronized int size() { return byName.size(); }
+    public synchronized int size() { return byKey.size(); }
 
     /** Atomic-rename write: serialise the current snapshot to a .tmp
      *  sibling and move it into place. Crash-safe — either the old
@@ -108,7 +149,7 @@ public class RuntimeTableTracker {
             if (parent != null) Files.createDirectories(parent);
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
             byte[] bytes = MAPPER.writerWithDefaultPrettyPrinter()
-                    .writeValueAsBytes(new ArrayList<>(byName.values()));
+                    .writeValueAsBytes(new ArrayList<>(byKey.values()));
             Files.write(tmp, bytes,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             Files.move(tmp, file,

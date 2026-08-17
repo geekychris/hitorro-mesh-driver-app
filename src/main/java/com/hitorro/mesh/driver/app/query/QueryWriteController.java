@@ -72,19 +72,33 @@ public class QueryWriteController {
     private final RuntimeTableTracker runtimeTracker;
     private final InventoryProbe inventoryProbe;
     private final PartitionPlacement placement;
+    private final PartitionReconciler reconciler;
 
     public QueryWriteController(MeshDriver driver,
                                 ObjectProvider<MinioProtocolAdapter> s3,
                                 Environment env,
                                 RuntimeTableTracker runtimeTracker,
                                 InventoryProbe inventoryProbe,
-                                PartitionPlacement placement) {
+                                PartitionPlacement placement,
+                                PartitionReconciler reconciler) {
         this.driver = driver;
         this.s3 = s3;
         this.env = env;
         this.runtimeTracker = runtimeTracker;
         this.inventoryProbe = inventoryProbe;
         this.placement = placement;
+        this.reconciler = reconciler;
+    }
+
+    /**
+     * Trigger a partition reconcile — scans the tracker for
+     * partitioned entries whose target agent has dropped, re-hashes
+     * onto live agents via the configured {@link PartitionPlacement}.
+     * See {@link PartitionReconciler#reconcile()} for the full policy.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/registered/reconcile-partitions")
+    public PartitionReconciler.Outcome reconcilePartitions() {
+        return reconciler.reconcile();
     }
 
     /** {@code GET /mesh/queries/registered} — snapshot of runtime table
@@ -211,11 +225,12 @@ public class QueryWriteController {
         // Agent-side: one targeted RegisterTableMessage per partition.
         for (PartitionEntry p : req.partitions) {
             String targetAgent = assignments.get(p.key);
+            boolean explicit = p.agentId != null && !p.agentId.isBlank();
             RegisterTableMessage msg = new RegisterTableMessage(
                     req.name, req.typeJson, p.uri, format,
                     /*broadcast=*/false, p.key, null, targetAgent);
             driver.publishRegisterTable(msg);
-            runtimeTracker.record(msg, /*agentsNotified=*/1);
+            runtimeTracker.record(msg, /*agentsNotified=*/1, targetAgent, explicit);
         }
 
         log.info("registered partitioned table {} — {} partitions across {} live agent(s), assignments: {}",
