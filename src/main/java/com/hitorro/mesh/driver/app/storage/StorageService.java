@@ -214,7 +214,11 @@ public class StorageService {
         MinioProtocolAdapter minio = s3.getIfAvailable();
         if (minio != null) {
             String base = "s3://" + minio.getBucket() + "/";
-            if (p.isEmpty()) return base + "datasets/";
+            // Default to the bucket root — always exists on a live bucket,
+            // and shows every top-level prefix (datasets/, queries/, …) so
+            // the user can see what's actually there instead of erroring
+            // out on a hard-coded "datasets/" that hasn't been synced yet.
+            if (p.isEmpty()) return base;
             return base + (p.startsWith("/") ? p.substring(1) : p);
         }
         if (p.isEmpty()) return "file:" + datasetsHome;
