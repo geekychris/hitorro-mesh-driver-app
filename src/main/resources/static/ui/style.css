@@ -656,6 +656,12 @@ table.result th.row-num-header {
 .pl-state-succeeded { background: #e5f5ea; color: var(--success); }
 .pl-state-failed    { background: #fce4e4; color: var(--danger); }
 .pl-state-cancelled { background: #eef; color: var(--muted); }
+/* Restartable-job badge — persistent + resumes across driver restart.
+   Distinct colour from state badges so the two are visually separable. */
+.pl-restartable {
+  background: #eef4ff; color: #1d4ed8; border: 1px solid #c7d8f8;
+  font-size: 0.72rem;
+}
 
 .pl-node {
   min-width: 12rem; padding: 0.6rem 0.75rem;

@@ -4654,7 +4654,10 @@ async function refreshRunHistory() {
     <div class="pl-run-card pl-node-${esc(r.state.toLowerCase())}" data-job="${esc(r.jobId)}">
       <div class="pl-run-hdr">
         <b>${esc(r.jobSpecName || '?')}</b>
-        <span class="badge pl-state-${esc(r.state.toLowerCase())}">${esc(r.state)}</span>
+        <span style="display:flex; gap: 0.25rem; align-items:center;">
+          ${r.restartable ? '<span class="badge pl-restartable" title="Persisted to disk — resumes after driver restart">↻ restartable</span>' : ''}
+          <span class="badge pl-state-${esc(r.state.toLowerCase())}">${esc(r.state)}</span>
+        </span>
       </div>
       <div class="meta">
         <code>${esc(r.jobId)}</code><br>
@@ -5518,6 +5521,7 @@ function startPolling(jobId) {
     const s = await api('/mesh/jobs/' + jobId);
     $('#pl-status-state').textContent = s.state;
     $('#pl-status-state').className = 'badge pl-state-' + s.state.toLowerCase();
+    $('#pl-status-restartable').hidden = !s.restartable;
     $('#pl-status-timing').textContent = ((Date.now() - started) / 1000).toFixed(1) + 's';
     renderDag(s);
     const events = await api('/mesh/jobs/' + jobId + '/events').catch(() => []);
