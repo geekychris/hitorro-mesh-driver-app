@@ -5536,12 +5536,24 @@ function startPolling(jobId) {
 function renderDag(status) {
   const nodes = status.nodes || [];
   if (!nodes.length) { $('#pl-dag').innerHTML = '<p class="meta">no nodes</p>'; return; }
-  // Simple flow: one card per node, left-to-right. Arrows would need a real
-  // topological layout — Phase 2. This gives us state + counts today.
-  $('#pl-dag').innerHTML = `
-    <div style="display:flex; gap: 0.6rem; flex-wrap: wrap;">
-      ${nodes.map(n => `
-        <div class="pl-node pl-node-${esc(n.state.toLowerCase())}">
+
+  // Group nodes by their rank (populated by JobRunner during topoRank).
+  // Nodes with no explicit rank field (older backends) all collapse to
+  // rank 0 — degrades to a single column, still readable.
+  const ranks = new Map();
+  for (const n of nodes) {
+    const r = (typeof n.rank === 'number') ? n.rank : 0;
+    if (!ranks.has(r)) ranks.set(r, []);
+    ranks.get(r).push(n);
+  }
+  const rankKeys = [...ranks.keys()].sort((a, b) => a - b);
+
+  // Build column HTML. Each node gets a stable data-node-id so the
+  // SVG-arrow pass can find it via querySelector to compute geometry.
+  const cols = rankKeys.map(r => `
+    <div class="pl-dag-col" data-rank="${r}">
+      ${ranks.get(r).map(n => `
+        <div class="pl-node pl-node-${esc(n.state.toLowerCase())}" data-node-id="${esc(n.id)}">
           <div class="pl-node-hdr">
             <b>${esc(n.id)}</b>
             <span class="badge pl-state-${esc(n.state.toLowerCase())}">${esc(n.state)}</span>
@@ -5557,6 +5569,85 @@ function renderDag(status) {
           ${n.error ? `<div class="pl-node-err">${esc(n.error)}</div>` : ''}
         </div>
       `).join('')}
+    </div>
+  `).join('');
+
+  $('#pl-dag').innerHTML = `
+    <div class="pl-dag-wrap">
+      <div class="pl-dag-grid">${cols}</div>
+      <svg class="pl-dag-svg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="pl-arrowhead" viewBox="0 0 10 10" refX="8" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#b3b3b3"/>
+          </marker>
+        </defs>
+      </svg>
     </div>`;
+
+  // After layout paints, measure each node's position and stroke arrows
+  // from every dep's right edge to this node's left edge. requestAnimationFrame
+  // waits for the grid to lay out — the SVG needs real geometry, not the
+  // pre-render zeros.
+  requestAnimationFrame(() => drawDagArrows(status));
+}
+
+/** Draw one SVG <path> per (dep, node) edge. Curves as a smooth
+ *  cubic bezier so long-distance skips (rank 0 → rank 3) don't
+ *  cut through intermediate node cards. Colour follows dep state
+ *  so users see the wave of "done" cascading through the DAG. */
+function drawDagArrows(status) {
+  const wrap = document.querySelector('#pl-dag .pl-dag-wrap');
+  const svg  = wrap && wrap.querySelector('.pl-dag-svg');
+  if (!wrap || !svg) return;
+
+  const wrapRect = wrap.getBoundingClientRect();
+  svg.setAttribute('viewBox', `0 0 ${wrapRect.width} ${wrapRect.height}`);
+  svg.setAttribute('width',  wrapRect.width);
+  svg.setAttribute('height', wrapRect.height);
+
+  // Clear old paths (keep <defs>).
+  [...svg.querySelectorAll('path.pl-dag-arrow')].forEach(p => p.remove());
+
+  const nodeById = {};
+  for (const n of (status.nodes || [])) nodeById[n.id] = n;
+
+  const rectOf = (id) => {
+    const el = wrap.querySelector(`.pl-node[data-node-id="${CSS.escape(id)}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return {
+      x0: r.left - wrapRect.left, y0: r.top    - wrapRect.top,
+      x1: r.right - wrapRect.left, y1: r.bottom - wrapRect.top,
+      cy: (r.top + r.bottom) / 2 - wrapRect.top,
+    };
+  };
+
+  for (const n of (status.nodes || [])) {
+    const deps = n.deps || [];
+    for (const depId of deps) {
+      const from = rectOf(depId);
+      const to   = rectOf(n.id);
+      if (!from || !to) continue;
+
+      const x1 = from.x1;                   // dep right edge
+      const y1 = from.cy;
+      const x2 = to.x0;                     // this node left edge
+      const y2 = to.cy;
+      const dx = Math.max(30, (x2 - x1) / 2);
+      const d  = `M ${x1} ${y1} C ${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`;
+
+      const dep = nodeById[depId] || {};
+      const cls = 'pl-dag-arrow ' +
+        (dep.state === 'RUNNING'    ? 'pl-dag-arrow-live' :
+         dep.state === 'SUCCEEDED'  ? 'pl-dag-arrow-done' :
+         dep.state === 'FAILED'     ? 'pl-dag-arrow-fail' : '');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('class', cls);
+      path.setAttribute('marker-end', 'url(#pl-arrowhead)');
+      svg.appendChild(path);
+    }
+  }
 }
 
