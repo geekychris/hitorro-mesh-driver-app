@@ -1023,6 +1023,7 @@ async function refreshInventoryMatrix() {
           <th style="text-align:left;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;">table</th>
           <th style="text-align:center;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;">source</th>
           ${agents.map(a => `<th style="text-align:center;padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;"><code>${esc(a)}</code></th>`).join('')}
+          <th style="padding:0.2rem 0.4rem;border-bottom:1px solid #ccc;background:#eef;"></th>
         </tr></thead>
         <tbody>
           ${sortedTables.map(name => {
@@ -1036,7 +1037,13 @@ async function refreshInventoryMatrix() {
             }
             return [...pks].map(pk => `
               <tr>
-                <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;"><code>${esc(name)}</code>${pk ? ` <span class="meta">${esc(pk)}</span>` : ''}</td>
+                <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;">
+                  <a href="#" class="inventory-open-playground" data-table="${esc(name)}"
+                     title="Open Playground with SELECT * FROM ${esc(name)} LIMIT 100"
+                     style="text-decoration:none;">
+                    <code>${esc(name)}</code>
+                  </a>${pk ? ` <span class="meta">${esc(pk)}</span>` : ''}
+                </td>
                 <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;text-align:center;color:#888;">
                   ${[...agents].map(a => cells.get(a + '|' + name + '|' + pk)?.source).filter(Boolean)[0] || ''}
                 </td>
@@ -1044,6 +1051,12 @@ async function refreshInventoryMatrix() {
                   const cell = cells.get(a + '|' + name + '|' + pk);
                   return `<td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;text-align:center;">${cell ? (cell.source === 'runtime' ? '⚡' : '✓') : ''}</td>`;
                 }).join('')}
+                <td style="padding:0.15rem 0.4rem;border-bottom:1px solid #eee;text-align:right;">
+                  <button class="secondary outline inventory-open-playground"
+                          data-table="${esc(name)}"
+                          style="width:auto;margin:0;font-size:0.7rem;padding:0.1rem 0.5rem;"
+                          title="Open Playground with a SELECT against ${esc(name)}">▶ Playground</button>
+                </td>
               </tr>`).join('');
           }).join('')}
         </tbody>
@@ -1051,7 +1064,18 @@ async function refreshInventoryMatrix() {
       </div>
       <p class="meta" style="margin:0.4rem 0 0;font-size:0.75rem;">
         ✓ = boot-time (from AgentProperties) · ⚡ = runtime (RegisterTableMessage). Partition key shown after table name when non-null.
+        Click the table name (or the ▶ Playground button) to jump to a pre-filled query.
       </p>`;
+    // Wire up the jump-to-playground handlers. Runtime tables (mail_messages,
+    // any user-registered NDJSON/Parquet) show up here as ⚡ but not in
+    // /mesh/tables, so this is the only place on the Cluster tab from which
+    // they're clickable — without this, users have to hand-type SELECTs into
+    // the Playground even though the table is visibly present here.
+    body.querySelectorAll('.inventory-open-playground').forEach(el =>
+      el.addEventListener('click', ev => {
+        ev.preventDefault();
+        openTableInPlayground(el.dataset.table);
+      }));
   } catch (e) {
     body.innerHTML = `<small style="color:var(--danger)">${esc(e.message || e)}</small>`;
   }
