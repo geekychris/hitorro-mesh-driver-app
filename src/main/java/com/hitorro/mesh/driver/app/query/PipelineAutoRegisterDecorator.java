@@ -104,7 +104,12 @@ public class PipelineAutoRegisterDecorator {
             try {
                 var req = new QueryWriteController.RegisterExistingRequest();
                 req.name = opts.tableName();
-                req.uri = uri;
+                // Register-existing requires a URI (BaseFileSystem needs a
+                // scheme). NdjsonFileSink accepts bare paths and file://
+                // URIs; the sink write path expands ~/ but the register
+                // path doesn't. Normalise: bare absolute paths → file://,
+                // ~/ → $HOME + file://, existing scheme unchanged.
+                req.uri = normaliseUriForRegister(uri);
                 req.format = "ndjson";
                 req.typeJson = opts.typeJson();     // null → induced from file
                 req.broadcast = opts.broadcastOrDefault();
@@ -115,6 +120,21 @@ public class PipelineAutoRegisterDecorator {
                 log.warn("pipelines auto-register: {} failed for {}: {}",
                         opts.tableName(), uri, e.toString());
             }
+        }
+
+        /** Package-visible for testing. Bare absolute → file://; ~/ →
+         *  file://$HOME/...; anything else (URL scheme, relative path)
+         *  passes through. */
+        static String normaliseUriForRegister(String raw) {
+            if (raw == null || raw.isBlank()) return raw;
+            if (raw.startsWith("~/")) {
+                return "file://" + System.getProperty("user.home") + raw.substring(1);
+            }
+            if (raw.startsWith("/")) return "file://" + raw;
+            // Already has a scheme (file: / http: / hdfs: / s3:) or is
+            // a relative path — hand off unchanged; register-existing's
+            // own resolution handles those.
+            return raw;
         }
     }
 }
