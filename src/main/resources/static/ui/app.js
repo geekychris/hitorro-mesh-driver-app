@@ -903,9 +903,435 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'pl-run')      refreshPipelines();
         if (target === 'pl-history')  refreshPlHistory();
         if (target === 'pl-docs')     refreshPlDocs();
+        if (target === 'pl-examples-tab') refreshPlExamples();
       }
     });
   });
+}
+
+// ==================================================================
+//  PIPELINES · EXAMPLES sub-tab
+//  Curated, dataset-organised catalogue of copy-paste-ready pipelines.
+//  Each entry: title / description / YAML / optional prerequisites.
+//  Rendered as collapsible cards grouped by category; every card
+//  offers a ▶ Load button (into the Run tab's editor) and 📋 Copy
+//  (clipboard). Complements PL_DOCS (which is per-KIND reference)
+//  and the Run tab's bundled-examples click-list (which loads on
+//  single-click but doesn't show YAML inline).
+// ==================================================================
+const PL_EXAMPLES = {
+  categories: [
+    ['Mac Mail', [
+      {
+        id: 'mail-register',
+        title: 'Register the Mail database as mail_messages',
+        desc: 'Scans your Envelope Index, folds mailchimp/substack per-campaign subdomains, derives ISO dates + year_month + hour + is_newsletter, materialises to NDJSON, auto-registers with the mesh SQL layer. Run once; then query with POST /mesh/queries.',
+        needs: 'Full Disk Access · macOS Mail (V10 path — adjust for older versions)',
+        yaml: `job: mail-register
+nodes:
+  - id: extract
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Mail/V10/MailData/Envelope Index"
+        query: |
+          SELECT
+            m.ROWID          AS id,
+            m.date_received  AS received_ts,
+            addr.address     AS sender_address,
+            subj.subject     AS subject,
+            summ.summary     AS summary,
+            m.read           AS read,
+            m.flagged        AS flagged,
+            m.size           AS size
+          FROM messages m
+          LEFT JOIN addresses addr ON addr.ROWID = m.sender
+          LEFT JOIN subjects  subj ON subj.ROWID = m.subject
+          LEFT JOIN summaries summ ON summ.ROWID = m.summary
+      steps:
+        - kind: groovy-map
+          script: |
+            if (row.sender_address != null) {
+                def at = row.sender_address.indexOf('@')
+                if (at > 0) row.sender_domain = row.sender_address.substring(at + 1).toLowerCase()
+            }
+            if (row.received_ts != null) {
+                def d = new Date((long)(row.received_ts * 1000L))
+                row.year_month = new java.text.SimpleDateFormat('yyyy-MM').format(d)
+            }
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/datasets/mail_messages/data.ndjson"
+          registerAsTable:
+            tableName: mail_messages
+            broadcast: true`,
+      },
+      {
+        id: 'mail-enrich',
+        title: 'JVS enrichment + Lucene index (NER + POS + segmentation)',
+        desc: 'Wraps each row as a JVS mail_message, runs OpenNLP enrichment (segmentation + POS + person/org/location NER) over subject + summary, indexes into a Lucene index queryable via /mesh/search/mail-enriched. Recent 500 messages by default — remove the LIMIT for full-inbox indexing (takes many minutes).',
+        needs: 'hitorro-mesh-pipelines-jvstype on classpath · OpenNLP models under $HT_DATA/opennlpmodels1.5/en-*.bin · HT_HOME + HT_DATA env vars set',
+        yaml: `job: mail-enriched-index
+nodes:
+  - id: enrich
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Mail/V10/MailData/Envelope Index"
+        query: |
+          SELECT m.ROWID AS id, m.date_received AS received_ts,
+                 addr.address AS sender_address,
+                 subj.subject AS subject, summ.summary AS summary
+          FROM messages m
+          LEFT JOIN addresses addr ON addr.ROWID = m.sender
+          LEFT JOIN subjects  subj ON subj.ROWID = m.subject
+          LEFT JOIN summaries summ ON summ.ROWID = m.summary
+          WHERE subj.subject IS NOT NULL
+          ORDER BY m.date_received DESC LIMIT 500
+      steps:
+        - kind: groovy-map
+          script: |
+            def out = [id: String.valueOf(row.id), ht_type: 'mail_message']
+            out.title = [mls: [[lang: 'en', text: row.subject ?: '']]]
+            if (row.summary) out.body = [mls: [[lang: 'en', text: row.summary]]]
+            out.sender_address = row.sender_address
+            out
+        - kind: jvs-enrich
+          tags: [basic, segmented, pos, ner]
+          typeJsonResource: "classpath:/types/mail_message.json"
+      sinks:
+        - kind: jvs-lucene
+          name: mail-enriched
+          typeJsonResource: "classpath:/types/mail_message.json"`,
+      },
+    ]],
+    ['iMessage / SMS', [
+      {
+        id: 'messages-register',
+        title: 'Register iMessage as messages_texts',
+        desc: 'Joins message + handle + chat tables so every row has the message text plus the other-party contact (phone/email) and chat context. Cocoa nanosecond timestamps → ISO / year_month / hour. is_group flag derived from chat_style.',
+        needs: 'Full Disk Access',
+        yaml: `job: messages-register
+nodes:
+  - id: extract
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Messages/chat.db"
+        query: |
+          SELECT
+            m.ROWID AS id, m.date AS date_ns, m.text AS text,
+            m.is_from_me AS from_me, m.is_read AS read, m.service AS service,
+            h.id AS contact, c.chat_identifier AS chat_id,
+            c.display_name AS chat_name, c.style AS chat_style
+          FROM message m
+          LEFT JOIN handle h ON h.ROWID = m.handle_id
+          LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+          LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+          WHERE m.text IS NOT NULL
+      steps:
+        - kind: groovy-map
+          script: |
+            if (row.date_ns != null) {
+                def ms = (long)(row.date_ns / 1_000_000L + 978_307_200_000L)
+                def d = new Date(ms)
+                row.sent_iso   = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").tap {
+                    setTimeZone(java.util.TimeZone.getTimeZone('UTC'))
+                }.format(d)
+                row.year_month = new java.text.SimpleDateFormat('yyyy-MM').format(d)
+            }
+            row.is_group = row.chat_style == 45
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/datasets/messages_texts/data.ndjson"
+          registerAsTable:
+            tableName: messages_texts
+            broadcast: true`,
+      },
+      {
+        id: 'messages-top-contacts',
+        title: 'Top texting contacts + sent-vs-received ratio',
+        desc: 'Ad-hoc query written as a pipeline (rather than SELECT) so you can chain steps or ship the result to a file. Same output as: SELECT contact, COUNT(*) FROM messages_texts GROUP BY contact ORDER BY 2 DESC.',
+        needs: 'messages-register must have been run first',
+        yaml: `job: messages-top-contacts
+nodes:
+  - id: rollup
+    pipeline:
+      source: {kind: sql, sql: "SELECT contact, from_me FROM messages_texts WHERE contact IS NOT NULL"}
+      reduce:
+        group-by: [contact]
+        aggs:
+          - {name: total,    kind: COUNT}
+          - {name: sent,     kind: SUM, of: from_me}
+      steps:
+        - kind: groovy-map
+          script: |
+            row.received = (row.total ?: 0) - (row.sent ?: 0)
+            row.pct_sent = row.total > 0 ? Math.round(100.0 * (row.sent ?: 0) / row.total) : 0
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/out/top-contacts.ndjson"`,
+      },
+    ]],
+    ['Safari history', [
+      {
+        id: 'safari-register',
+        title: 'Register Safari history as safari_visits',
+        desc: 'One row per VISIT joined with URL / domain metadata. Cocoa-seconds timestamps → ISO. Extracts a clean lowercase domain from the URL (Safari sometimes leaves domain_expansion blank). is_search_result flag filters out Google-redirect noise.',
+        needs: 'Full Disk Access',
+        yaml: `job: safari-register
+nodes:
+  - id: extract
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Safari/History.db"
+        query: |
+          SELECT v.id AS visit_id, v.visit_time AS visit_ts_cocoa,
+                 v.title AS title, v.load_successful AS ok,
+                 hi.url AS url, hi.domain_expansion AS domain_raw,
+                 hi.visit_count AS lifetime_visits
+          FROM history_visits v
+          JOIN history_items hi ON hi.id = v.history_item
+      steps:
+        - kind: groovy-map
+          script: |
+            if (row.visit_ts_cocoa != null) {
+                def d = new Date((long)((row.visit_ts_cocoa + 978_307_200) * 1000d))
+                row.visited_iso = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").tap {
+                    setTimeZone(java.util.TimeZone.getTimeZone('UTC'))
+                }.format(d)
+                row.year_month = new java.text.SimpleDateFormat('yyyy-MM').format(d)
+            }
+            def domain = row.domain_raw
+            if ((domain == null || domain.isEmpty()) && row.url != null) {
+                def m = row.url =~ ~/^https?:\\/\\/([^\\/:?#]+)/
+                if (m.find()) domain = m.group(1).toLowerCase()
+            }
+            row.domain = domain
+            row.is_search_result = row.url != null && (row.url.contains('/search?') || row.url.contains('google.com/url'))
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/datasets/safari_visits/data.ndjson"
+          registerAsTable:
+            tableName: safari_visits
+            broadcast: true`,
+      },
+    ]],
+    ['Apple Photos', [
+      {
+        id: 'photos-register',
+        title: 'Register Photos library as photos_assets',
+        desc: 'One row per asset (photo or video) with dimensions, GPS, favorite/trash flags, HDR/portrait-mode markers, derived megapixels + aspect_ratio + orientation. year_num (not "year" — mesh SQL reserved word) for annual rollups.',
+        needs: 'Full Disk Access · adjust "Photos Library.photoslibrary" if you renamed yours',
+        yaml: `job: photos-register
+nodes:
+  - id: extract
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Pictures/Photos Library.photoslibrary/database/Photos.sqlite"
+        query: |
+          SELECT Z_PK AS id, ZDATECREATED AS taken_ts_cocoa,
+                 ZFILENAME AS filename, ZKIND AS kind,
+                 ZWIDTH AS width, ZHEIGHT AS height, ZDURATION AS duration,
+                 ZLATITUDE AS lat, ZLONGITUDE AS lng,
+                 ZFAVORITE AS favorite, ZTRASHEDSTATE AS trashed,
+                 ZHDRTYPE AS hdr, ZDEPTHTYPE AS depth
+          FROM ZASSET
+      steps:
+        - kind: groovy-map
+          script: |
+            if (row.taken_ts_cocoa != null) {
+                def d = new Date((long)((row.taken_ts_cocoa + 978_307_200) * 1000d))
+                row.taken_iso = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").format(d)
+                row.year_month = new java.text.SimpleDateFormat('yyyy-MM').format(d)
+                row.year_num = (new java.text.SimpleDateFormat('yyyy').format(d)) as Integer
+            }
+            row.kind_name = row.kind == 1 ? 'video' : 'photo'
+            if (row.width && row.height) {
+                row.megapixels = ((row.width * row.height) / 1_000_000.0d).round(2)
+                row.orientation = row.width > row.height * 1.05 ? 'landscape' :
+                                   row.height > row.width * 1.05 ? 'portrait' : 'square'
+            }
+            row.has_location = row.lat != null && row.lng != null && !(row.lat == 0 && row.lng == 0)
+            row.is_favorite = row.favorite == 1
+            row.is_trashed  = row.trashed == 1
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/datasets/photos_assets/data.ndjson"
+          registerAsTable:
+            tableName: photos_assets
+            broadcast: true`,
+      },
+    ]],
+    ['Screen Time', [
+      {
+        id: 'screentime-register',
+        title: 'Register app-usage events as screentime_events',
+        desc: 'Streams ZOBJECT rows tagged /app/usage from knowledgeC.db. Each row is one foreground session — start/end Cocoa seconds → duration. Categorises apps by bundle-id prefix (Apple / Chrome / Slack / JetBrains / Microsoft / etc).',
+        needs: 'Full Disk Access',
+        yaml: `job: screentime-register
+nodes:
+  - id: extract
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Application Support/Knowledge/knowledgeC.db"
+        query: |
+          SELECT Z_PK AS id, ZSTARTDATE AS start_ts_cocoa,
+                 ZENDDATE AS end_ts_cocoa, ZVALUESTRING AS app_bundle
+          FROM ZOBJECT
+          WHERE ZSTREAMNAME = '/app/usage' AND ZVALUESTRING IS NOT NULL
+      steps:
+        - kind: groovy-map
+          script: |
+            if (row.start_ts_cocoa != null) {
+                def d = new Date((long)((row.start_ts_cocoa + 978_307_200) * 1000d))
+                row.started_iso = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").format(d)
+                row.year_month = new java.text.SimpleDateFormat('yyyy-MM').format(d)
+            }
+            row.duration_sec = (row.end_ts_cocoa != null && row.start_ts_cocoa != null)
+                ? (row.end_ts_cocoa - row.start_ts_cocoa).round(1) : 0.0d
+            def b = row.app_bundle ?: ''
+            row.app_category =
+                b.startsWith('com.apple.') ? 'Apple' :
+                b.contains('.slack')       ? 'Slack' :
+                b.contains('.zoom')        ? 'Meetings' :
+                b.contains('.chrome')      ? 'Chrome' :
+                b.contains('.jetbrains.')  ? 'JetBrains' :
+                b.contains('.microsoft.')  ? 'Microsoft' : 'Other'
+            row
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/datasets/screentime_events/data.ndjson"
+          registerAsTable:
+            tableName: screentime_events
+            broadcast: true`,
+      },
+    ]],
+    ['Cross-DB', [
+      {
+        id: 'monthly-digital-life',
+        title: 'Monthly digital-life summary',
+        desc: 'Rolls up mail_messages / messages_texts / photos_assets / safari_visits by year_month into a single table you can chart. Requires all four register jobs to have been run.',
+        needs: 'mail-register + messages-register + photos-register + safari-register run first',
+        yaml: `job: monthly-digital-life
+nodes:
+  - id: mail
+    pipeline:
+      source: {kind: sql, sql: "SELECT year_month, 'email' AS kind FROM mail_messages"}
+      reduce:
+        group-by: [year_month, kind]
+        aggs: [{name: n, kind: COUNT}]
+      sinks: [{kind: memory-table, name: partial}]
+  - id: msgs
+    pipeline:
+      source: {kind: sql, sql: "SELECT year_month, 'text' AS kind FROM messages_texts"}
+      reduce:
+        group-by: [year_month, kind]
+        aggs: [{name: n, kind: COUNT}]
+      sinks: [{kind: memory-table, name: partial}]
+  - id: photos
+    pipeline:
+      source: {kind: sql, sql: "SELECT year_month, 'photo' AS kind FROM photos_assets WHERE is_trashed = FALSE"}
+      reduce:
+        group-by: [year_month, kind]
+        aggs: [{name: n, kind: COUNT}]
+      sinks: [{kind: memory-table, name: partial}]
+  - id: safari
+    pipeline:
+      source: {kind: sql, sql: "SELECT year_month, 'browse' AS kind FROM safari_visits WHERE is_search_result = FALSE"}
+      reduce:
+        group-by: [year_month, kind]
+        aggs: [{name: n, kind: COUNT}]
+      sinks: [{kind: memory-table, name: partial}]
+  - id: combine
+    depends: [mail, msgs, photos, safari]
+    pipeline:
+      source: {kind: ref, node: partial}
+      sinks:
+        - kind: ndjson-file
+          url: "/tmp/hitorro-mesh-smoke/out/monthly-digital-life.ndjson"`,
+      },
+    ]],
+  ],
+};
+
+function refreshPlExamples() {
+  const container = $('#pl-examples-container');
+  if (!container) return;
+  if (container.dataset.built === '1') return;   // built once — YAML is static
+  container.dataset.built = '1';
+  const total = PL_EXAMPLES.categories.reduce((n, [, items]) => n + items.length, 0);
+  const countEl = $('#pl-examples-count');
+  if (countEl) countEl.textContent = total;
+
+  const parts = [];
+  for (const [cat, items] of PL_EXAMPLES.categories) {
+    parts.push(`<h4 style="margin: 1.2rem 0 0.4rem; border-bottom: 1px solid #ddd; padding-bottom: 0.2rem; color: #2E86AB;">${esc(cat)}</h4>`);
+    for (const ex of items) {
+      parts.push(`
+        <details class="pl-example" style="margin-bottom: 0.5rem;">
+          <summary style="cursor: pointer; padding: 0.4rem 0.6rem; background: #f4f7fa; border-radius: 4px;">
+            <b>${esc(ex.title)}</b>
+            <span style="float: right;">
+              <button class="secondary outline pl-example-load" data-ex="${esc(ex.id)}"
+                      style="width:auto;margin:0 0.3rem 0 0;padding:0.1rem 0.5rem;font-size:0.75rem;"
+                      title="Send this pipeline into the Run tab's editor + switch there">▶ Load</button>
+              <button class="secondary outline pl-example-copy" data-ex="${esc(ex.id)}"
+                      style="width:auto;margin:0;padding:0.1rem 0.5rem;font-size:0.75rem;"
+                      title="Copy the raw YAML to your clipboard">📋 Copy</button>
+            </span>
+          </summary>
+          <div style="padding: 0.5rem 0.6rem;">
+            <p style="margin: 0.2rem 0;">${esc(ex.desc)}</p>
+            ${ex.needs ? `<p style="margin: 0.2rem 0 0.5rem;"><small class="meta"><b>Needs:</b> ${esc(ex.needs)}</small></p>` : ''}
+            <pre style="background:#1e2733;color:#e2e8f0;padding:0.7rem 0.9rem;border-radius:4px;font-size:0.78rem;overflow-x:auto;"><code style="background:transparent!important;color:inherit!important;padding:0!important;font-size:inherit!important;font-family:ui-monospace,monospace;">${esc(ex.yaml)}</code></pre>
+          </div>
+        </details>`);
+    }
+  }
+  container.innerHTML = parts.join('');
+
+  // Wire ▶ Load — sends YAML into the Run tab and switches to it.
+  container.querySelectorAll('.pl-example-load').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const ex = plExampleById(btn.dataset.ex);
+      if (!ex) return;
+      const editor = document.getElementById('pl-yaml');
+      if (editor) editor.value = ex.yaml;
+      const runBtn = document.querySelector('button[data-view="pl-run"]');
+      if (runBtn) runBtn.click();
+    }));
+
+  // Wire 📋 Copy — clipboard the raw YAML.
+  container.querySelectorAll('.pl-example-copy').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      const ex = plExampleById(btn.dataset.ex);
+      if (!ex) return;
+      try {
+        await navigator.clipboard.writeText(ex.yaml);
+        const orig = btn.textContent;
+        btn.textContent = '✓ copied';
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+      } catch (e) {
+        alert('Clipboard write failed: ' + e.message);
+      }
+    }));
+}
+
+function plExampleById(id) {
+  for (const [, items] of PL_EXAMPLES.categories) {
+    const hit = items.find(x => x.id === id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // ================================================================ TOP BAR

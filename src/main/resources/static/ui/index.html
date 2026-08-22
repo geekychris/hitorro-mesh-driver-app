@@ -795,6 +795,8 @@
               title="Pipeline runs history — status, timings, sink counts. Survives driver restart.">History</button>
       <button data-view="pl-docs"
               title="Every pipeline kind (source / step / reduce / sink) with YAML shape and one example each.">Docs</button>
+      <button data-view="pl-examples-tab"
+              title="Copy-paste ready pipelines grouped by dataset — mail / messages / safari / photos / screen time / cross-DB.">Examples</button>
     </div>
 
     <!-- ============ BUILD sub-tab ============ -->
@@ -957,13 +959,34 @@
 
     <!-- ============ DOCS sub-tab ============ -->
     <div id="pl-docs" class="view">
-      <div class="grid">
-        <article style="max-width: 14rem;">
+      <div class="pl-docs-layout">
+        <article>
           <header><span>Reference</span></header>
           <nav id="pl-docs-nav" class="pl-docs-nav">loading…</nav>
         </article>
         <article><div id="pl-docs-body" class="pl-docs-body">select a kind →</div></article>
       </div>
+    </div>
+
+    <!-- ============ EXAMPLES sub-tab ============ -->
+    <div id="pl-examples-tab" class="view">
+      <article>
+        <header>
+          <span>Ready-made pipelines <span id="pl-examples-count" class="badge">?</span></span>
+          <small class="meta">click ▶ Load to send into the Run tab · click 📋 Copy for raw YAML</small>
+        </header>
+        <p><small class="meta">
+          These pipelines demonstrate what you can do with the local
+          macOS SQLite databases the sqlite adapter ships bundled register
+          jobs for (mail_messages / messages_texts / safari_visits /
+          photos_assets / screentime_events). Also includes a couple of
+          cross-DB queries + the JVS-enrichment example for Mail.
+          Every pipeline is directly runnable — no editing required
+          unless the sample paths (e.g. <code>V10</code> in the Mail
+          Envelope Index path) don't match your macOS version.
+        </small></p>
+        <div id="pl-examples-container">loading…</div>
+      </article>
     </div>
   </section>
 

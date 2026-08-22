@@ -1062,7 +1062,19 @@ table.result th.row-num-header {
 }
 .pb-yaml code { background: transparent !important; color: inherit !important; padding: 0 !important; font-size: inherit !important; }
 
-/* Docs sub-tab */
+/* Docs sub-tab — explicit 2-column grid so Pico's auto-column layout
+   doesn't wrap the nav to full width on narrower viewports. */
+.pl-docs-layout {
+  display: grid;
+  grid-template-columns: 15rem 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.pl-docs-layout > article { margin: 0; }
+.pl-docs-body { min-width: 0; }   /* prevent long <pre> lines from blowing out the grid cell */
+@media (max-width: 720px) {
+  .pl-docs-layout { grid-template-columns: 1fr; }
+}
 .pl-docs-nav { list-style: none; padding: 0; margin: 0; font-size: 0.85rem; }
 .pl-docs-nav li { padding: 0; margin: 0; }
 .pl-docs-nav .pl-docs-cat {
