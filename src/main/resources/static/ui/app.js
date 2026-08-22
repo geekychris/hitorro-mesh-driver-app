@@ -969,10 +969,79 @@ nodes:
             broadcast: true`,
       },
       {
-        id: 'mail-enrich',
-        title: 'JVS enrichment + Lucene index (NER + POS + segmentation)',
+        id: 'mail-to-jvs-enriched',
+        title: 'Mail → JVS email → enrich → searchable Lucene (heavily annotated)',
         driverLocal: true,
-        desc: 'Wraps each row as a JVS mail_message, runs OpenNLP enrichment (segmentation + POS + person/org/location NER) over subject + summary, indexes into a Lucene index queryable via /mesh/search/mail-enriched. Recent 500 messages by default — remove the LIMIT for full-inbox indexing (takes many minutes).',
+        needs: 'hitorro-mesh-pipelines-jvstype on classpath · OpenNLP models · HT_HOME + HT_DATA env vars set',
+        desc: 'End-to-end recipe with a fresh email JVS type (extends sysobject; adds sender_address/name/domain, recipient_count, mailbox_url, read/flagged, size_bytes, is_newsletter). Every meaningful line is commented — look for "CHANGE THIS" markers when tuning. Reads SQLite → reshapes into JVS email tree (title.mls[0]=subject, body.mls[0]=summary) → jvs-enrich populates .clean/.segmented/.pos/.segmented_ner on both → jvs-lucene sink. Search back: GET /mesh/search/mail-jvs-enriched?q=body.mls.segmented_ner.textmarkup_en_m:NE_Person',
+        yaml: `job: mail-to-jvs-enriched
+nodes:
+  - id: enrich
+    pipeline:
+      source:
+        kind: sqlite
+        path: "~/Library/Mail/V10/MailData/Envelope Index"
+        query: |
+          SELECT
+            m.ROWID          AS id,
+            m.date_received  AS received_ts,
+            addr.address     AS sender_address,
+            addr.comment     AS sender_name,
+            subj.subject     AS subject,
+            summ.summary     AS body,
+            mb.url           AS mailbox_url,
+            m.read           AS read,
+            m.flagged        AS flagged,
+            m.size           AS size_bytes,
+            (SELECT COUNT(*) FROM recipients r WHERE r.message = m.ROWID)
+                             AS recipient_count
+          FROM messages m
+          LEFT JOIN addresses addr ON addr.ROWID = m.sender
+          LEFT JOIN subjects  subj ON subj.ROWID = m.subject
+          LEFT JOIN summaries summ ON summ.ROWID = m.summary
+          LEFT JOIN mailboxes mb   ON mb.ROWID   = m.mailbox
+          WHERE subj.subject IS NOT NULL AND summ.summary IS NOT NULL
+          ORDER BY m.date_received DESC
+          LIMIT 500
+      steps:
+        - kind: groovy-map
+          # Reshape flat SQL row → JVS 'email' tree. title & body are
+          # core_mls (inherited from sysobject) — enrichment writes
+          # .clean/.segmented/.pos/.segmented_ner onto each mls entry.
+          script: |
+            def out = [ht_type: 'email', id: String.valueOf(row.id)]
+            out.title = [mls: [[lang: 'en', text: row.subject ?: '']]]
+            if (row.body) out.body = [mls: [[lang: 'en', text: row.body]]]
+            if (row.received_ts) out.times = [date_received: (long)(row.received_ts * 1000L)]
+            def raw = null
+            if (row.sender_address != null) {
+                def at = row.sender_address.indexOf('@')
+                if (at > 0) raw = row.sender_address.substring(at + 1).toLowerCase()
+            }
+            out.sender_address  = row.sender_address
+            out.sender_name     = row.sender_name
+            out.sender_domain   = raw
+            out.recipient_count = row.recipient_count
+            out.mailbox_url     = row.mailbox_url
+            out.read            = row.read == 1
+            out.flagged         = row.flagged == 1
+            out.size_bytes      = row.size_bytes
+            def LIST = ['mailchimpapp.com','substack.com','mailerlite.com','tinyletter.com','buttondown.email','convertkit.com']
+            out.is_newsletter = raw != null && LIST.any { raw.endsWith('.' + it) || raw == it }
+            out
+        - kind: jvs-enrich
+          tags: [basic, segmented, pos, ner]
+          typeJsonResource: "classpath:/types/email.json"
+      sinks:
+        - kind: jvs-lucene
+          name: mail-jvs-enriched
+          typeJsonResource: "classpath:/types/email.json"`,
+      },
+      {
+        id: 'mail-enrich',
+        title: 'JVS enrichment + Lucene index (mail_message shape — older type)',
+        driverLocal: true,
+        desc: 'Same shape as mail-to-jvs-enriched but uses the mail_message JVS type (with a keyword sender_name analyzer) instead of the newer email type. Kept as a reference — prefer mail-to-jvs-enriched for new work.',
         needs: 'hitorro-mesh-pipelines-jvstype on classpath · OpenNLP models under $HT_DATA/opennlpmodels1.5/en-*.bin · HT_HOME + HT_DATA env vars set',
         yaml: `job: mail-enriched-index
 nodes:
