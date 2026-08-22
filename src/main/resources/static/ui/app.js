@@ -925,6 +925,7 @@ const PL_EXAMPLES = {
       {
         id: 'mail-register',
         title: 'Register the Mail database as mail_messages',
+        driverLocal: true,
         desc: 'Scans your Envelope Index, folds mailchimp/substack per-campaign subdomains, derives ISO dates + year_month + hour + is_newsletter, materialises to NDJSON, auto-registers with the mesh SQL layer. Run once; then query with POST /mesh/queries.',
         needs: 'Full Disk Access · macOS Mail (V10 path — adjust for older versions)',
         yaml: `job: mail-register
@@ -970,6 +971,7 @@ nodes:
       {
         id: 'mail-enrich',
         title: 'JVS enrichment + Lucene index (NER + POS + segmentation)',
+        driverLocal: true,
         desc: 'Wraps each row as a JVS mail_message, runs OpenNLP enrichment (segmentation + POS + person/org/location NER) over subject + summary, indexes into a Lucene index queryable via /mesh/search/mail-enriched. Recent 500 messages by default — remove the LIMIT for full-inbox indexing (takes many minutes).',
         needs: 'hitorro-mesh-pipelines-jvstype on classpath · OpenNLP models under $HT_DATA/opennlpmodels1.5/en-*.bin · HT_HOME + HT_DATA env vars set',
         yaml: `job: mail-enriched-index
@@ -1010,6 +1012,7 @@ nodes:
       {
         id: 'messages-register',
         title: 'Register iMessage as messages_texts',
+        driverLocal: true,
         desc: 'Joins message + handle + chat tables so every row has the message text plus the other-party contact (phone/email) and chat context. Cocoa nanosecond timestamps → ISO / year_month / hour. is_group flag derived from chat_style.',
         needs: 'Full Disk Access',
         yaml: `job: messages-register
@@ -1080,6 +1083,7 @@ nodes:
       {
         id: 'safari-register',
         title: 'Register Safari history as safari_visits',
+        driverLocal: true,
         desc: 'One row per VISIT joined with URL / domain metadata. Cocoa-seconds timestamps → ISO. Extracts a clean lowercase domain from the URL (Safari sometimes leaves domain_expansion blank). is_search_result flag filters out Google-redirect noise.',
         needs: 'Full Disk Access',
         yaml: `job: safari-register
@@ -1126,6 +1130,7 @@ nodes:
       {
         id: 'photos-register',
         title: 'Register Photos library as photos_assets',
+        driverLocal: true,
         desc: 'One row per asset (photo or video) with dimensions, GPS, favorite/trash flags, HDR/portrait-mode markers, derived megapixels + aspect_ratio + orientation. year_num (not "year" — mesh SQL reserved word) for annual rollups.',
         needs: 'Full Disk Access · adjust "Photos Library.photoslibrary" if you renamed yours',
         yaml: `job: photos-register
@@ -1174,6 +1179,7 @@ nodes:
       {
         id: 'screentime-register',
         title: 'Register app-usage events as screentime_events',
+        driverLocal: true,
         desc: 'Streams ZOBJECT rows tagged /app/usage from knowledgeC.db. Each row is one foreground session — start/end Cocoa seconds → duration. Categorises apps by bundle-id prefix (Apple / Chrome / Slack / JetBrains / Microsoft / etc).',
         needs: 'Full Disk Access',
         yaml: `job: screentime-register
@@ -1276,10 +1282,17 @@ function refreshPlExamples() {
   for (const [cat, items] of PL_EXAMPLES.categories) {
     parts.push(`<h4 style="margin: 1.2rem 0 0.4rem; border-bottom: 1px solid #ddd; padding-bottom: 0.2rem; color: #2E86AB;">${esc(cat)}</h4>`);
     for (const ex of items) {
+      // Driver-local badge — sqlite sources CAN'T dispatch to remote
+      // agents (the DB file lives on the driver host). Highlighting
+      // this up front saves users from hitting the placement guard's
+      // IllegalArgumentException after clicking ▶ Run distributed.
+      const localBadge = ex.driverLocal
+        ? '<span class="badge" style="background:#fff4d6;color:#8a5a00;margin-left:0.5rem;font-size:0.65rem;" title="Uses a SQLite source — file is local to the driver host; ▶ Run distributed will error out. Use plain ▶ Run.">driver-local only</span>'
+        : '';
       parts.push(`
         <details class="pl-example" style="margin-bottom: 0.5rem;">
           <summary style="cursor: pointer; padding: 0.4rem 0.6rem; background: #f4f7fa; border-radius: 4px;">
-            <b>${esc(ex.title)}</b>
+            <b>${esc(ex.title)}</b>${localBadge}
             <span style="float: right;">
               <button class="secondary outline pl-example-load" data-ex="${esc(ex.id)}"
                       style="width:auto;margin:0 0.3rem 0 0;padding:0.1rem 0.5rem;font-size:0.75rem;"
@@ -1292,6 +1305,7 @@ function refreshPlExamples() {
           <div style="padding: 0.5rem 0.6rem;">
             <p style="margin: 0.2rem 0;">${esc(ex.desc)}</p>
             ${ex.needs ? `<p style="margin: 0.2rem 0 0.5rem;"><small class="meta"><b>Needs:</b> ${esc(ex.needs)}</small></p>` : ''}
+            ${ex.driverLocal ? '<p style="margin: 0.2rem 0 0.5rem;padding:0.3rem 0.6rem;background:#fff8e6;border-left:3px solid var(--warning);font-size:0.8rem;"><b>Driver-local only.</b> SQLite sources require the file to be on the driver host — clicking <b>▶ Run distributed</b> will error out with <code>IllegalArgumentException: node has a sqlite source which cannot be dispatched</code>. Use plain <b>▶ Run</b> instead.</p>' : ''}
             <pre style="background:#1e2733;color:#e2e8f0;padding:0.7rem 0.9rem;border-radius:4px;font-size:0.78rem;overflow-x:auto;"><code style="background:transparent!important;color:inherit!important;padding:0!important;font-size:inherit!important;font-family:ui-monospace,monospace;">${esc(ex.yaml)}</code></pre>
           </div>
         </details>`);
