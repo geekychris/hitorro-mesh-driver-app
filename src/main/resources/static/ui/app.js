@@ -1698,17 +1698,146 @@ function jumpToDatasetsTab(id) {
 function openTableInPlayground(tableName) {
   (async () => {
     const dsId = tableName.replace(/_/g, '-');
+    let primed = false;
+    // First choice: shipped dataset manifest (Geonames / ISO4217 / etc.) —
+    // gets us the rich cross-dataset JOIN snippets.
     try {
       const m = await api('/mesh/datasets/' + encodeURIComponent(dsId));
       if (typeof setPlaygroundDatasetContext === 'function') {
         setPlaygroundDatasetContext(m, tableName);
+        primed = true;
       }
-    } catch (_) { /* not a manifest-backed table — fine */ }
+    } catch (_) { /* not a shipped dataset — try runtime table next */ }
+    // Fallback: runtime-registered table (mail_messages, any user
+    // /register-existing). Pull the type from /mesh/queries/registered
+    // and synthesise a minimal manifest so setPlaygroundRuntimeContext
+    // can build a schema-derived snippet library — otherwise the user
+    // lands on the Playground with stale snippets from whatever dataset
+    // was previously in context, which is exactly the bug this fixes.
+    if (!primed) {
+      try {
+        const all = await api('/mesh/queries/registered');
+        const rt  = (all || []).find(r => r.name === tableName);
+        if (rt && rt.typeJson) {
+          setPlaygroundRuntimeContext(tableName, JSON.parse(rt.typeJson));
+          primed = true;
+        }
+      } catch (_) { /* nothing to prime with — SQL only */ }
+    }
+    // Reset stale context so the user isn't misled — old snippets stay
+    // in the left rail but the header stops claiming "Playing with X".
+    if (!primed) {
+      pgDatasetContext = null;
+      pgWinContext = null;
+      const ctxEl = document.getElementById('pg-context');
+      if (ctxEl) ctxEl.hidden = true;
+      if (typeof renderSnippets === 'function') renderSnippets();
+    }
     const sql = `SELECT * FROM ${tableName} LIMIT 20`;
     if (typeof setSql === 'function') setSql(sql);
     const btn = document.querySelector('button[role="tab"][data-target="playground"]');
     if (btn) btn.click();
   })();
+}
+
+/**
+ * Set the Playground's context to a runtime-registered table (created
+ * via /register-existing — mail_messages, user Parquet imports, etc.).
+ * Builds a snippet library derived from the table's inferred typeJson:
+ * Peek, GROUP BY per string field, ORDER BY DESC per number field, and
+ * time-shape queries when *_iso / year_month / hour_of_day columns are
+ * present.
+ *
+ * <p>Mirrors {@link setPlaygroundDatasetContext} in shape (both write
+ * to the same pgDatasetContext store + call renderSnippets) but skips
+ * the shipped-dataset niceties (USING PLACE joins, relationship-derived
+ * snippets) that don't apply to arbitrary user tables.</p>
+ */
+function setPlaygroundRuntimeContext(tableName, typeJson) {
+  const fields = (typeJson.fields || []).map(f => f.name);
+  const strings = (typeJson.fields || []).filter(f => f.type === 'core_string').map(f => f.name);
+  const numbers = (typeJson.fields || []).filter(f => f.type === 'core_long' || f.type === 'core_double').map(f => f.name);
+  const bools   = (typeJson.fields || []).filter(f => f.type === 'core_boolean').map(f => f.name);
+
+  const snippets = [];
+  snippets.push({
+    name: 'Peek 20 rows',
+    desc: `SELECT * FROM ${tableName} LIMIT 20`,
+    sql: `SELECT * FROM ${tableName} LIMIT 20`,
+  });
+  // Time-shape snippets — recognise the year_month / hour_of_day /
+  // day_of_week columns the mail-register pipeline synthesises. Cheap
+  // & broadly useful for any table with those columns.
+  if (fields.includes('year_month')) {
+    snippets.push({
+      name: 'Volume by month',
+      desc: 'year_month rollup',
+      sql: `SELECT year_month, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY year_month\nORDER BY year_month DESC\nLIMIT 24`,
+    });
+  }
+  if (fields.includes('hour_of_day')) {
+    snippets.push({
+      name: 'Busiest hour of day',
+      desc: 'UTC',
+      sql: `SELECT hour_of_day, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY hour_of_day\nORDER BY hour_of_day`,
+    });
+  }
+  if (fields.includes('day_of_week')) {
+    snippets.push({
+      name: 'By day of week',
+      desc: '',
+      sql: `SELECT day_of_week, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY day_of_week`,
+    });
+  }
+  // Categorical rollups — first N string fields whose name isn't
+  // obviously a body/summary/preview blob.
+  for (const s of strings.slice(0, 6)) {
+    if (['subject', 'summary', 'subject_full', 'body', 'content', 'text', 'description'].includes(s)) continue;
+    snippets.push({
+      name: `GROUP BY ${s}`,
+      desc: 'top-N rollup',
+      sql: `SELECT ${s}, COUNT(*) AS n\nFROM ${tableName}\nWHERE ${s} IS NOT NULL\nGROUP BY ${s}\nORDER BY n DESC\nLIMIT 20`,
+    });
+  }
+  // Numeric ORDER BY — top-N by first non-id numeric field.
+  const numCandidate = numbers.find(n => !['id', 'received_ts', 'sent_ts'].includes(n) && !n.endsWith('_ts'));
+  if (numCandidate) {
+    snippets.push({
+      name: `Top by ${numCandidate}`,
+      desc: 'ORDER BY DESC',
+      sql: `SELECT *\nFROM ${tableName}\nORDER BY ${numCandidate} DESC\nLIMIT 20`,
+    });
+  }
+  // Boolean flag rollups (read / flagged / is_newsletter on the mail
+  // table; would fire for any table with core_boolean columns).
+  for (const b of bools.slice(0, 3)) {
+    snippets.push({
+      name: `Count by ${b}`,
+      desc: 'boolean split',
+      sql: `SELECT ${b}, COUNT(*) AS n\nFROM ${tableName}\nGROUP BY ${b}`,
+    });
+  }
+
+  pgDatasetContext = {
+    id: tableName,
+    tableName,
+    title: tableName + ' (runtime-registered)',
+    snippets,
+  };
+  pgWinContext = null;
+
+  const nameEl = document.getElementById('pg-context-name');
+  const kindEl = document.getElementById('pg-context-kind');
+  const metaEl = document.getElementById('pg-context-meta');
+  const ctxEl  = document.getElementById('pg-context');
+  if (nameEl) nameEl.textContent = tableName;
+  if (kindEl) kindEl.textContent = '⚡ Runtime table';
+  if (metaEl) metaEl.textContent = `— snippets derived from ${fields.length} inferred fields`;
+  if (ctxEl)  ctxEl.hidden = false;
+  // Snippets sub-tab visible so the user immediately sees the tuned list.
+  const lpSnippetsBtn = document.querySelector('[data-lp="lp-snippets"]');
+  if (lpSnippetsBtn && !lpSnippetsBtn.classList.contains('active')) lpSnippetsBtn.click();
+  if (typeof renderSnippets === 'function') renderSnippets();
 }
 
 function jumpToPlayground(id) {
