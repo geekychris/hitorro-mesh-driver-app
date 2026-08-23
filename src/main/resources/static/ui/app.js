@@ -4815,7 +4815,9 @@ function jobRowHtml(j, i) {
               : state === 'CANCELLED' ? '#c93'
               : 'var(--muted-color,#888)';
   const started = j.startedAt || '';
-  const startedShort = started ? started.replace('T',' ').replace(/\.\d+Z?/, '') : '—';
+  // Local timezone — API returns UTC ISO strings.
+  const startedShort = fmtLocalTs(started);
+  const startedUtcTitle = started ? `UTC: ${started}` : '';
   const durationMs = j.durationMs != null ? j.durationMs
                      : (j.finishedAt && j.startedAt
                         ? new Date(j.finishedAt).getTime() - new Date(j.startedAt).getTime()
@@ -4832,7 +4834,7 @@ function jobRowHtml(j, i) {
         <br><small class="meta">${esc(j.jobId || '?')}</small>
       </td>
       <td style="padding:0.3rem;"><span style="color:${color}; font-weight:bold;">${esc(state)}</span></td>
-      <td style="padding:0.3rem;"><small>${esc(startedShort)}</small></td>
+      <td style="padding:0.3rem;"><small title="${esc(startedUtcTitle)}">${esc(startedShort)}</small></td>
       <td style="padding:0.3rem; text-align:right;">${dur}</td>
       <td style="padding:0.3rem; text-align:right;">${nodeCount}</td>
       <td style="padding:0.3rem; text-align:right;">${rowsOut.toLocaleString()}</td>
@@ -5426,6 +5428,19 @@ function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString(); } catch (_) { return iso; }
 }
 
+/** Local-timezone date + time, compact. All backend timestamps are
+ *  UTC ISO strings ("2026-08-23T16:19:18.949177Z") — showing them
+ *  raw is misleading (users read them as local). This coerces to
+ *  the browser's timezone and drops the fractional seconds. */
+function fmtLocalTs(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ` +
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 let plHistoryTimer = null;
 
 // ================================================================ PIPELINE BUILDER (multi-node DAG)
@@ -5927,7 +5942,7 @@ async function refreshPlHistory() {
           return `<tr>
             <td style="padding:0.25rem 0.3rem;"><code>${esc(j.jobSpecName || j.jobId)}</code></td>
             <td style="padding:0.25rem 0.3rem;"><span class="badge ${stateCls}">${esc(j.state || '?')}</span></td>
-            <td style="padding:0.25rem 0.3rem;font-size:0.75rem;">${esc((j.startedAt || '').replace('T', ' ').substr(0,19))}</td>
+            <td style="padding:0.25rem 0.3rem;font-size:0.75rem;" title="${esc(j.startedAt ? 'UTC: ' + j.startedAt : '')}">${esc(fmtLocalTs(j.startedAt))}</td>
             <td style="padding:0.25rem 0.3rem;">${(j.nodes || []).length}</td>
             <td style="padding:0.25rem 0.3rem;">${rows.toLocaleString()}</td>
           </tr>`;
@@ -6248,12 +6263,27 @@ async function submitRun(endpoint, btn, label, mode) {
 function startPolling(jobId) {
   if (plActivePoll) clearInterval(plActivePoll);
   const started = Date.now();
+  let lastRowsOut = 0, lastSampleAt = started;
   const poll = async () => {
     const s = await api('/mesh/jobs/' + jobId);
     $('#pl-status-state').textContent = s.state;
     $('#pl-status-state').className = 'badge pl-state-' + s.state.toLowerCase();
     $('#pl-status-restartable').hidden = !s.restartable;
-    $('#pl-status-timing').textContent = ((Date.now() - started) / 1000).toFixed(1) + 's';
+    const elapsedS = (Date.now() - started) / 1000;
+    // Aggregate progress across all nodes so a bare "RUNNING" turns into
+    // "RUNNING · 150/500 rows · 12/s" — visible confirmation that work is
+    // happening, not the pipeline stuck. rate uses samples from the last
+    // poll interval so it reflects current throughput, not job-lifetime avg.
+    const nodes = s.nodes || [];
+    const rowsOut = nodes.reduce((sum, n) => sum + (n.rowsOut || 0), 0);
+    const rowsIn  = nodes.reduce((sum, n) => sum + (n.rowsIn  || 0), 0);
+    const dt = (Date.now() - lastSampleAt) / 1000;
+    const rate = dt > 0.2 ? Math.max(0, Math.round((rowsOut - lastRowsOut) / dt)) : 0;
+    if (dt > 0.2) { lastSampleAt = Date.now(); lastRowsOut = rowsOut; }
+    const progress = rowsIn > 0
+      ? `${rowsOut.toLocaleString()}/${rowsIn.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}`
+      : (rowsOut ? `${rowsOut.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}` : '');
+    $('#pl-status-timing').textContent = `${elapsedS.toFixed(1)}s${progress ? ' · ' + progress : ''}`;
     renderDag(s);
     const events = await api('/mesh/jobs/' + jobId + '/events').catch(() => []);
     $('#pl-events').innerHTML = events.map(e =>
