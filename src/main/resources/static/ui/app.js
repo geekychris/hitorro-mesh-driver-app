@@ -1009,7 +1009,7 @@ nodes:
           # core_mls (inherited from sysobject) — enrichment writes
           # .clean/.segmented/.pos/.segmented_ner onto each mls entry.
           script: |
-            def out = [ht_type: 'email', id: String.valueOf(row.id)]
+            def out = [ht_type: 'mail_email', id: String.valueOf(row.id)]
             out.title = [mls: [[lang: 'en', text: row.subject ?: '']]]
             if (row.body) out.body = [mls: [[lang: 'en', text: row.body]]]
             if (row.received_ts) out.times = [date_received: (long)(row.received_ts * 1000L)]
@@ -1031,11 +1031,11 @@ nodes:
             out
         - kind: jvs-enrich
           tags: [basic, segmented, pos, ner]
-          typeJsonResource: "classpath:/types/email.json"
+          typeJsonResource: "classpath:/types/mail_email.json"
       sinks:
         - kind: jvs-lucene
           name: mail-jvs-enriched
-          typeJsonResource: "classpath:/types/email.json"`,
+          typeJsonResource: "classpath:/types/mail_email.json"`,
       },
       {
         id: 'mail-enrich',
