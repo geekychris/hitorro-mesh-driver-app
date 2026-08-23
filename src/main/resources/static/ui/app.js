@@ -4698,12 +4698,24 @@ let jobsTimer = null;
 async function refreshJobsTab() {
   wireJobsHandlers();
   await loadJobs();
-  if (jobsTimer) clearInterval(jobsTimer);
-  jobsTimer = setInterval(() => {
-    if (!$('#jobs').classList.contains('active')) return;
-    loadJobs();
-  }, 5000);
+  scheduleJobsPoll();
 }
+
+// Adaptive poll: 1s while any job is RUNNING (so newly-submitted jobs
+// appear near-instantly), 5s otherwise. Re-schedules itself after every
+// tick so the interval matches current state without racing.
+function scheduleJobsPoll() {
+  if (jobsTimer) clearTimeout(jobsTimer);
+  const hasRunning = (jobsLastRunning || 0) > 0;
+  const delay = hasRunning ? 1000 : 5000;
+  jobsTimer = setTimeout(async () => {
+    if ($('#jobs').classList.contains('active')) {
+      await loadJobs();
+    }
+    scheduleJobsPoll();
+  }, delay);
+}
+let jobsLastRunning = 0;
 
 function wireJobsHandlers() {
   const btn = $('#jobs-refresh');
@@ -4721,17 +4733,22 @@ async function loadJobs() {
     $('#jobs-list').innerHTML = `<p style="color:var(--danger)">error: ${esc(e.message)}</p>`;
     return;
   }
-  // Merge — running jobs on top, history below. Dedup by jobId.
-  const runningIds = new Set(running.filter(r => r.state === 'RUNNING').map(r => r.jobId));
-  const all = [];
-  running.filter(r => r.state === 'RUNNING').forEach(r => all.push({...r, _running: true}));
-  history.forEach(h => { if (!runningIds.has(h.jobId)) all.push(h); });
-  $('#jobs-count').textContent = `${all.length} jobs — ${runningIds.size} running`;
-  if (!all.length) {
+  // Split into running vs finished. Running jobs get their own
+  // dedicated section at the top of the panel so the user can't miss a
+  // job that was just submitted — this was the previous UX bug.
+  const runningJobs = running.filter(r => r.state === 'RUNNING');
+  const runningIds = new Set(runningJobs.map(r => r.jobId));
+  const doneJobs = history.filter(h => !runningIds.has(h.jobId));
+  jobsLastRunning = runningJobs.length;   // drives scheduleJobsPoll cadence
+
+  $('#jobs-count').textContent = `${runningJobs.length + doneJobs.length} jobs — ${runningJobs.length} running`;
+
+  if (!runningJobs.length && !doneJobs.length) {
     $('#jobs-list').innerHTML = '<p class="meta">No jobs yet. Run a bundled example from the Pipelines tab.</p>';
     return;
   }
-  $('#jobs-list').innerHTML = `
+
+  const tableHtml = (jobs, idPrefix) => `
     <div style="overflow-x:auto;">
       <table style="width:100%; font-size:0.78rem; border-collapse:collapse;">
         <thead>
@@ -4746,15 +4763,46 @@ async function loadJobs() {
           </tr>
         </thead>
         <tbody>
-          ${all.map((j,i) => jobRowHtml(j,i)).join('')}
+          ${jobs.map((j,i) => jobRowHtml(j, idPrefix + i)).join('')}
         </tbody>
       </table>
     </div>`;
-  all.forEach((j, i) => {
-    const head = $(`#job-row-${i}`);
+
+  const runningBlock = runningJobs.length
+    ? `<div style="margin-bottom: 1rem; padding: 0.5rem 0.75rem; border-left: 3px solid #3af; background: rgba(51,170,255,0.06); border-radius: 3px;">
+         <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
+           <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#3af; animation: pulse 1.5s ease-in-out infinite;"></span>
+           <strong style="font-size:0.9rem;">${runningJobs.length} running now</strong>
+           <small class="meta">auto-refreshes every 1s while running</small>
+         </div>
+         ${tableHtml(runningJobs, 'r')}
+       </div>`
+    : '';
+
+  const doneBlock = doneJobs.length
+    ? `<div>
+         <div style="font-size:0.85rem; color:var(--muted-color,#777); margin-bottom:0.35rem;">Recent (${doneJobs.length})</div>
+         ${tableHtml(doneJobs, 'd')}
+       </div>`
+    : '';
+
+  $('#jobs-list').innerHTML = `
+    <style>@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }</style>
+    ${runningBlock}
+    ${doneBlock}`;
+
+  runningJobs.forEach((j, i) => {
+    const head = $(`#job-row-r${i}`);
     if (head) head.addEventListener('click', () => {
-      const body = $(`#job-body-${i}`);
-      body.hidden = !body.hidden;
+      const body = $(`#job-body-r${i}`);
+      if (body) body.hidden = !body.hidden;
+    });
+  });
+  doneJobs.forEach((j, i) => {
+    const head = $(`#job-row-d${i}`);
+    if (head) head.addEventListener('click', () => {
+      const body = $(`#job-body-d${i}`);
+      if (body) body.hidden = !body.hidden;
     });
   });
 }
@@ -6151,7 +6199,7 @@ async function submitRun(endpoint, btn, label, mode) {
   $('#pl-dag').innerHTML = `<div class="meta">${mode === 'distributed'
       ? 'dispatching to agents advertising pipeline-node capability…'
       : 'contacting driver…'}</div>`;
-  $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  $('#pl-status').scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
     const r = await api(endpoint, {
       method: 'POST',
@@ -6161,6 +6209,27 @@ async function submitRun(endpoint, btn, label, mode) {
     $('#pl-status-id').textContent = r.jobId;
     $('#pl-status-state').textContent = 'RUNNING';
     $('#pl-status-state').className = 'badge pl-state-running';
+    // Wire the copy + "view in Jobs" affordances so the user always
+    // has a way to grab the jobId even after the toast fades.
+    const copyBtn = $('#pl-status-copy');
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(r.jobId);
+          const orig = copyBtn.textContent;
+          copyBtn.textContent = '✓ copied';
+          setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+        } catch (_) { plToast('clipboard blocked — jobId: ' + r.jobId, 'warn'); }
+      };
+    }
+    const jobsLink = $('#pl-status-jobs-link');
+    if (jobsLink) {
+      jobsLink.onclick = (e) => {
+        e.preventDefault();
+        const jobsTabBtn = document.querySelector('[role="tab"][data-target="jobs"]');
+        if (jobsTabBtn) jobsTabBtn.click();
+      };
+    }
     startPolling(r.jobId);
     plToast(`▶ started job ${r.jobId} (${mode})`, 'ok');
     refreshRunHistory();

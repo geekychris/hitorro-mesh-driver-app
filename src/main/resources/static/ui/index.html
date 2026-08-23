@@ -920,15 +920,26 @@
                     title="YAML job spec. Click a bundled example on the left, or build one in the Build sub-tab."
                     style="font-family: ui-monospace, monospace; font-size: 0.85rem;"></textarea>
 
-          <div id="pl-status" hidden style="margin-top: 0.75rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem;">
-              <strong>Job:</strong> <code id="pl-status-id"></code>
-              <span id="pl-status-state" class="badge"></span>
+          <div id="pl-status" hidden
+               style="margin-top: 0.75rem; padding: 0.6rem 0.8rem; border: 2px solid var(--primary-mesh, #3af); border-radius: 6px; background: rgba(51, 170, 255, 0.06); box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+            <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+              <strong style="font-size: 0.95rem;">Job:</strong>
+              <code id="pl-status-id"
+                    style="font-size: 0.95rem; font-weight: 600; padding: 0.15rem 0.5rem; background: rgba(0,0,0,0.06); border-radius: 3px; user-select: all;"></code>
+              <button id="pl-status-copy" type="button" class="secondary outline"
+                      style="padding: 0.1rem 0.5rem; font-size: 0.75rem; margin: 0;"
+                      title="Copy jobId to clipboard">📋 copy</button>
+              <span id="pl-status-state" class="badge" style="font-size: 0.85rem;"></span>
               <span id="pl-status-restartable" class="badge pl-restartable" hidden title="Persisted to disk — resumes after driver restart">↻ restartable</span>
+              <a id="pl-status-jobs-link" href="#" data-target="jobs"
+                 style="font-size: 0.8rem; text-decoration: none;"
+                 title="Switch to the Jobs tab to see this job and every other run">
+                view in Jobs tab →
+              </a>
               <span style="flex:1"></span>
               <small id="pl-status-timing" class="meta"></small>
             </div>
-            <div id="pl-dag" style="margin-top: 0.5rem;"></div>
+            <div id="pl-dag" style="margin-top: 0.6rem;"></div>
             <details style="margin-top: 0.5rem;">
               <summary class="meta">Progress events</summary>
               <div id="pl-events" style="font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 12rem; overflow-y: auto;"></div>
