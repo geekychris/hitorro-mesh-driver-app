@@ -907,7 +907,12 @@
           <header>
             <span>Job spec (YAML)</span>
             <span style="flex:1"></span>
-            <button id="pl-run" type="button"
+            <!-- id is pl-run-btn (not pl-run) — the sub-tab container div above
+                 owns id="pl-run" so the tab switcher can toggle its .active class.
+                 A collision on pl-run made document.getElementById return the DIV,
+                 the click bubbled up, and btn.textContent = '⋯ Running' wiped the
+                 whole sub-tab contents including #pl-status → null deref. -->
+            <button id="pl-run-btn" type="button"
                     title="Local Run — pipeline executes IN the driver JVM. Auto-loads a bundled example if the editor is empty."
                     style="margin:0 0.4rem 0 0; padding:0.15rem 0.9rem;">▶ Run</button>
             <button id="pl-run-dist" type="button" class="secondary"
@@ -1372,6 +1377,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260823b"></script>
+<script src="app.js?v=20260823c"></script>
 </body>
 </html>

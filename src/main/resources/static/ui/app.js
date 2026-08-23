@@ -6183,7 +6183,10 @@ function plToast(msg, kind = 'ok') {
 // click" bug reports — the handler wire-up never registered.)
 
 document.addEventListener('DOMContentLoaded', () => {
-  const runBtn = $('#pl-run');
+  // #pl-run-btn (not #pl-run) — the sub-tab container also has id="pl-run"
+  // and returning the div here would cause the click handler to bubble-catch
+  // and then wipe the whole sub-tab via btn.textContent assignment.
+  const runBtn = $('#pl-run-btn');
   const runDistBtn = $('#pl-run-dist');
   if (!runBtn) return;
   runBtn.addEventListener('click', () => submitRun('/mesh/jobs/run', runBtn, '▶ Run', 'local'));
