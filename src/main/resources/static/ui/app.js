@@ -6208,6 +6208,22 @@ async function submitRun(endpoint, btn, label, mode) {
     plToast('editor is empty — click a bundled example on the left first', 'warn');
     return;
   }
+  // Guard: /mesh/jobs/run-distributed rejects driver-local sources
+  // (sqlite path, file:// on the driver host) at the placement stage
+  // with an IllegalArgumentException 14ms after submit. Users hit it
+  // when they click "▶ Run distributed" on any pipeline that reads
+  // from their local Mail / Photos / Messages DBs. Auto-route to the
+  // local endpoint instead and tell them why — no round-trip failure,
+  // no confusing red row in the Jobs tab.
+  if (mode === 'distributed' && /^\s*kind:\s*sqlite\b/m.test(yaml)) {
+    plToast(
+      'pipeline has a sqlite source — falling back to local run (the DB file lives on the driver, not the agents)',
+      'warn'
+    );
+    endpoint = '/mesh/jobs/run';
+    mode = 'local';
+    label = '▶ Run';
+  }
   btn.disabled = true;
   btn.textContent = '⋯ ' + (mode === 'distributed' ? 'Dispatching' : 'Running');
   $('#pl-status').hidden = false;
