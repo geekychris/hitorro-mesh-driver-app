@@ -6264,31 +6264,59 @@ function startPolling(jobId) {
   if (plActivePoll) clearInterval(plActivePoll);
   const started = Date.now();
   let lastRowsOut = 0, lastSampleAt = started;
+
+  // Wired here (not in submitRun) so the refresh button also works
+  // when a card in the history is clicked to resume watching.
+  const refreshBtn = $('#pl-status-refresh');
+  if (refreshBtn) refreshBtn.onclick = () => { poll().catch(e => console.error('manual refresh:', e)); };
+
   const poll = async () => {
-    const s = await api('/mesh/jobs/' + jobId);
-    $('#pl-status-state').textContent = s.state;
-    $('#pl-status-state').className = 'badge pl-state-' + s.state.toLowerCase();
-    $('#pl-status-restartable').hidden = !s.restartable;
-    const elapsedS = (Date.now() - started) / 1000;
-    // Aggregate progress across all nodes so a bare "RUNNING" turns into
-    // "RUNNING · 150/500 rows · 12/s" — visible confirmation that work is
-    // happening, not the pipeline stuck. rate uses samples from the last
-    // poll interval so it reflects current throughput, not job-lifetime avg.
-    const nodes = s.nodes || [];
-    const rowsOut = nodes.reduce((sum, n) => sum + (n.rowsOut || 0), 0);
-    const rowsIn  = nodes.reduce((sum, n) => sum + (n.rowsIn  || 0), 0);
-    const dt = (Date.now() - lastSampleAt) / 1000;
-    const rate = dt > 0.2 ? Math.max(0, Math.round((rowsOut - lastRowsOut) / dt)) : 0;
-    if (dt > 0.2) { lastSampleAt = Date.now(); lastRowsOut = rowsOut; }
-    const progress = rowsIn > 0
-      ? `${rowsOut.toLocaleString()}/${rowsIn.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}`
-      : (rowsOut ? `${rowsOut.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}` : '');
-    $('#pl-status-timing').textContent = `${elapsedS.toFixed(1)}s${progress ? ' · ' + progress : ''}`;
-    renderDag(s);
-    const events = await api('/mesh/jobs/' + jobId + '/events').catch(() => []);
-    $('#pl-events').innerHTML = events.map(e =>
-      `<div><code>${esc(e.at.slice(11,19))}</code> <b>${esc(e.nodeId)}</b> ${esc(e.kind)}: ${esc(e.message)}</div>`
-    ).join('');
+    // Fetch state first — everything after this is best-effort rendering.
+    // Any failure below MUST NOT prevent the terminal-state check from
+    // firing, or the poll wedges (this was the "just says running" bug).
+    let s;
+    try {
+      s = await api('/mesh/jobs/' + jobId);
+    } catch (e) {
+      console.error('[pl-poll] state fetch failed:', e);
+      return;   // try again next tick
+    }
+
+    // State + badge update — separate try so a render failure below
+    // doesn't leave the user staring at a stale label.
+    try {
+      $('#pl-status-state').textContent = s.state || '?';
+      $('#pl-status-state').className = 'badge pl-state-' + (s.state || 'unknown').toLowerCase();
+      $('#pl-status-restartable').hidden = !s.restartable;
+      const elapsedS = (Date.now() - started) / 1000;
+      // Aggregate progress across all nodes so a bare "RUNNING" turns into
+      // "RUNNING · 150/500 rows · 12/s" — visible confirmation work is
+      // happening, not the pipeline wedged. Rate is instantaneous (last
+      // poll interval), not lifetime average.
+      const nodes = s.nodes || [];
+      const rowsOut = nodes.reduce((sum, n) => sum + (n.rowsOut || 0), 0);
+      const rowsIn  = nodes.reduce((sum, n) => sum + (n.rowsIn  || 0), 0);
+      const dt = (Date.now() - lastSampleAt) / 1000;
+      const rate = dt > 0.2 ? Math.max(0, Math.round((rowsOut - lastRowsOut) / dt)) : 0;
+      if (dt > 0.2) { lastSampleAt = Date.now(); lastRowsOut = rowsOut; }
+      const progress = rowsIn > 0
+        ? `${rowsOut.toLocaleString()}/${rowsIn.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}`
+        : (rowsOut ? `${rowsOut.toLocaleString()} rows${rate ? ` · ${rate}/s` : ''}` : '');
+      $('#pl-status-timing').textContent = `${elapsedS.toFixed(1)}s${progress ? ' · ' + progress : ''}`;
+    } catch (e) { console.error('[pl-poll] status update failed:', e); }
+
+    // DAG render + events — non-critical. Isolate so failures here
+    // (unexpected node shape, missing state, etc.) don't wedge polling.
+    try { renderDag(s); }
+    catch (e) { console.error('[pl-poll] renderDag failed:', e); }
+    try {
+      const events = await api('/mesh/jobs/' + jobId + '/events').catch(() => []);
+      $('#pl-events').innerHTML = events.map(e =>
+        `<div><code>${esc(e.at.slice(11,19))}</code> <b>${esc(e.nodeId)}</b> ${esc(e.kind)}: ${esc(e.message)}</div>`
+      ).join('');
+    } catch (e) { console.error('[pl-poll] events fetch failed:', e); }
+
+    // Terminal-state check — MUST always run so the loop stops cleanly.
     if (s.state === 'SUCCEEDED' || s.state === 'FAILED' || s.state === 'CANCELLED') {
       clearInterval(plActivePoll); plActivePoll = null;
       refreshRunHistory();

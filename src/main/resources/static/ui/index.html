@@ -929,6 +929,9 @@
               <button id="pl-status-copy" type="button" class="secondary outline"
                       style="padding: 0.1rem 0.5rem; font-size: 0.75rem; margin: 0;"
                       title="Copy jobId to clipboard">📋 copy</button>
+              <button id="pl-status-refresh" type="button" class="secondary outline"
+                      style="padding: 0.1rem 0.5rem; font-size: 0.75rem; margin: 0;"
+                      title="Force a poll now — useful if the auto-poll wedges (open DevTools console for the reason)">↻ refresh</button>
               <span id="pl-status-state" class="badge" style="font-size: 0.85rem;"></span>
               <span id="pl-status-restartable" class="badge pl-restartable" hidden title="Persisted to disk — resumes after driver restart">↻ restartable</span>
               <a id="pl-status-jobs-link" href="#" data-target="jobs"
@@ -1369,6 +1372,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260823a"></script>
+<script src="app.js?v=20260823b"></script>
 </body>
 </html>
