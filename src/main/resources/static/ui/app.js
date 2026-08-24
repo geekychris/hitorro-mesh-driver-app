@@ -4244,7 +4244,7 @@ function updateRequestPreview() {
     // Coordinator — the full JVS query pipeline (search + optional
     // fetch/fixup/page/summarize). Always emit a concrete URL —
     // resolveFleetUrl() reads the Search page's fleet-URL field
-    // (default http://localhost:8090) so the copied curl works
+    // (default http://localhost:8095) so the copied curl works
     // immediately without any hand-edit.
     const base = resolveFleetUrl();
     const url = base + '/api/retrieval/execute';
@@ -4319,14 +4319,14 @@ function fleetBase() {
 /**
  * Resolve the fleet-retrieval coordinator URL for preview purposes,
  * independent of the Backend selector. The Search page's fleet-URL
- * field is always populated (defaults to http://localhost:8090) so
+ * field is always populated (defaults to http://localhost:8095) so
  * copy-request previews always render a concrete, immediately-usable
  * URL rather than an <angle-bracket-placeholder>. Any trailing
  * slashes are trimmed so we can safely append endpoint paths.
  */
 function resolveFleetUrl() {
-  const raw = ($('#search-fleet-url')?.value || 'http://localhost:8090').trim();
-  return raw.replace(/\/+$/, '') || 'http://localhost:8090';
+  const raw = ($('#search-fleet-url')?.value || 'http://localhost:8095').trim();
+  return raw.replace(/\/+$/, '') || 'http://localhost:8095';
 }
 
 /**

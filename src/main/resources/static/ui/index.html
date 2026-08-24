@@ -978,7 +978,7 @@
                 One snippet per output sink — Lucene sinks get the coordinator
                 POST (full JVS query with all stages), KV sinks get single-key
                 GET + streaming scan. Coordinator URL comes from Search →
-                Backend → Fleet URL (default <code>http://localhost:8090</code>).
+                Backend → Fleet URL (default <code>http://localhost:8095</code>).
               </small>
             </div>
           </details>
@@ -1081,7 +1081,7 @@
           <option value="fleet">fleet-retrieval (full pipeline)</option>
         </select>
         <label id="search-fleet-url-label" hidden style="min-width: 4rem;">URL</label>
-        <input id="search-fleet-url" type="text" hidden value="http://localhost:8090"
+        <input id="search-fleet-url" type="text" hidden value="http://localhost:8095"
                style="flex:1;" placeholder="http://host:8090"/>
         <small id="search-backend-hint" class="meta" style="flex:1;">
           Point at a running hitorro-fleet-retrieval service to unlock aggregates, multi-index merging, KV fallback.
@@ -1476,6 +1476,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260824g"></script>
+<script src="app.js?v=20260824h"></script>
 </body>
 </html>
