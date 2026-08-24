@@ -4085,6 +4085,7 @@ async function refreshSearchTab() {
 function wireStageBuilder() {
   const inputs = [
     '#search-q', '#search-offset', '#search-limit', '#search-facets', '#search-lang',
+    '#search-index',
     '#stage-fetch',
     '#stage-fixup', '#stage-fixup-tags',
     '#stage-page', '#stage-page-rows', '#stage-page-page',
@@ -4097,6 +4098,26 @@ function wireStageBuilder() {
     el.addEventListener('input', updateQueryPreview);
     el.addEventListener('change', updateQueryPreview);
   });
+  // curl / .http format toggle — refresh the request preview when it changes.
+  document.querySelectorAll('input[name="req-fmt"]').forEach(r => {
+    if (r._wiredPreview) return;
+    r._wiredPreview = true;
+    r.addEventListener('change', updateRequestPreview);
+  });
+  // 📋 copy — grabs whatever curl / .http text is currently rendered.
+  const copyBtn = $('#search-req-copy');
+  if (copyBtn && !copyBtn._wired) {
+    copyBtn._wired = true;
+    copyBtn.addEventListener('click', async () => {
+      const txt = $('#search-request-preview')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(txt);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = '✓ copied';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+      } catch (_) { plToast('clipboard blocked — select the box and Cmd-C', 'warn'); }
+    });
+  }
 }
 
 function buildRetrievalQuery() {
@@ -4143,6 +4164,66 @@ function updateQueryPreview() {
   const idx = ($('#search-index')?.value || '<pick an index>').trim();
   const body = {indexName: idx, query: buildRetrievalQuery()};
   pre.textContent = JSON.stringify(body, null, 2);
+  updateRequestPreview();
+}
+
+/**
+ * Live preview of the HTTP request the search page would fire,
+ * rendered as either a shell-safe `curl` command or a JetBrains
+ * IntelliJ / VS Code REST Client `.http` file. Users can copy-paste
+ * to reproduce the same query outside the UI.
+ *
+ * Local backend → GET /mesh/search/{index}?q=…&limit=…
+ * Fleet backend → POST {fleetUrl}/api/retrieval/execute + JSON body
+ */
+function updateRequestPreview() {
+  const pre = $('#search-request-preview');
+  if (!pre) return;
+  const fmt = (document.querySelector('input[name="req-fmt"]:checked')?.value) || 'curl';
+  const fleet = fleetBase();
+  const idx = ($('#search-index')?.value || '<pick-an-index>').trim();
+  const q = ($('#search-q')?.value || '').trim();
+  const lim = parseInt($('#search-limit')?.value, 10) || 20;
+
+  let text;
+  if (fleet) {
+    const url  = `${fleet}/api/retrieval/execute`;
+    const body = {indexName: idx, query: buildRetrievalQuery()};
+    const pretty = JSON.stringify(body, null, 2);
+    if (fmt === 'http') {
+      text =
+        `### Fleet retrieval — ${idx}\n` +
+        `POST ${url}\n` +
+        `Content-Type: application/json\n\n` +
+        `${pretty}\n`;
+    } else {
+      // Single-quote the JSON body and escape any embedded single quotes.
+      // Bash-safe: '...' interpolates nothing, and closing/re-opening
+      // around \' is the standard trick.
+      const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
+      text =
+        `curl -sS -X POST '${url}' \\\n` +
+        `  -H 'content-type: application/json' \\\n` +
+        `  -d ${shellQuoted}`;
+    }
+  } else {
+    // Local backend — GET on the in-driver search service.
+    const origin = window.location.origin;   // http://host:port
+    const params = new URLSearchParams();
+    params.set('q', q);
+    params.set('limit', String(lim));
+    const url = `${origin}/mesh/search/${encodeURIComponent(idx)}?${params.toString()}`;
+    if (fmt === 'http') {
+      text =
+        `### Search ${idx}\n` +
+        `GET ${url}\n` +
+        `Accept: application/json\n`;
+    } else {
+      // Single-quote the whole URL — shell won't interpret & or ?.
+      text = `curl -sS '${url}'`;
+    }
+  }
+  pre.textContent = text;
 }
 
 function wireSearchBackendToggle() {
@@ -4161,11 +4242,13 @@ function wireSearchBackendToggle() {
       hint.innerHTML = 'In-driver LuceneSearchService — lightweight, single index, no aggregates.';
     }
     loadSearchIndexes();
+    updateRequestPreview();   // switching backend swaps GET ↔ POST shape
   };
   sel.addEventListener('change', apply);
   urlIn.addEventListener('input', () => {
     if (sel.value === 'fleet') hint.innerHTML =
       `Calls <code>POST ${esc(urlIn.value)}/api/retrieval/execute</code>`;
+    updateRequestPreview();   // URL is baked into the preview
   });
   apply();
 }

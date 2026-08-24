@@ -1144,6 +1144,32 @@
                  background:var(--card-sectioning-background-color,#f5f5f5); border-radius:4px;"></pre>
           </details>
 
+          <details style="margin-bottom:0.35rem;">
+            <summary>
+              <small class="meta">Copy request — as <code>curl</code> or IntelliJ <code>.http</code> file</small>
+            </summary>
+            <div style="padding: 0.35rem 0.4rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem;">
+                <label><input type="radio" name="req-fmt" value="curl" checked/> curl</label>
+                <label><input type="radio" name="req-fmt" value="http"/> IntelliJ <code>.http</code></label>
+                <span style="flex:1"></span>
+                <button id="search-req-copy" type="button" class="secondary outline"
+                        style="padding: 0.1rem 0.6rem; font-size: 0.75rem; margin: 0;"
+                        title="Copy to clipboard">📋 copy</button>
+              </div>
+              <pre id="search-request-preview" style="font-size:0.72rem; margin:0;
+                   max-height:220px; overflow:auto; padding:0.4rem 0.55rem;
+                   background:var(--card-sectioning-background-color,#f5f5f5); border-radius:4px;
+                   white-space:pre; user-select:all;"></pre>
+              <small class="meta" style="display:block; margin-top:0.35rem;">
+                Paste into a shell for <code>curl</code>, or into a
+                <code>*.http</code> file (IntelliJ / VS Code REST Client) — hit ▷
+                inline to fire the same request outside the UI. Backend + fields
+                update the preview live.
+              </small>
+            </div>
+          </details>
+
           <div id="search-result" style="margin-top: 0.75rem;">
             <p class="meta">Pick an index and click 🔍 Run.</p>
           </div>
@@ -1377,6 +1403,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260823d"></script>
+<script src="app.js?v=20260824a"></script>
 </body>
 </html>
