@@ -42,8 +42,14 @@ public final class FleetRegistry {
                         "Full retrieval coordination runtime (RetrievalPipelineBuilder: "
                                 + "Index → Document → Fixup → Pagination → Facet → Summarization). "
                                 + "Shared-mode reads pipeline-produced Lucene + KV from ${HITORRO_PIPELINES_HOME}.",
-                        8090,
-                        5090,
+                        // 8095 (not 8090) because :8090 is commonly squatted by
+                        // other local dev tools (e.g. Claude API server). mesh-up.sh
+                        // launches this on 8095 and passes the endpoint to the
+                        // driver via -Dhitorro.fleet.endpoints so the federated
+                        // controllers can relay to it. Keep this in sync with
+                        // MESH_FLEET_RETRIEVAL_PORT in mesh-up.sh.
+                        8095,
+                        5095,
                         "/api/retrieval/health",
                         jarCandidatesFor("hitorro-fleet-retrieval", "3.0.1"),
                         // HT_BIN must be set so the type system (JsonTypeSystem +
@@ -58,7 +64,7 @@ public final class FleetRegistry {
                         // paths in the type system consult sysprops directly.
                         List.of(
                                 "--hitorro.fleet.retrieval.mode=shared",
-                                "--server.port=8090"
+                                "--server.port=8095"
                         )
                 )
                 // future fleet members line up here (bump debugPort by 1 each)
