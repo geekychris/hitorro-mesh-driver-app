@@ -5409,15 +5409,24 @@ async function loadBundledExamples() {
       <span class="meta">click to load into editor</span>
     </div>
   `).join('');
+  // Setting .value programmatically does NOT fire the 'input' event that
+  // updatePipelineRequestPreview listens on, so bundle-example loads
+  // would leave the copy-as-curl preview stale. dispatchEvent fixes it.
+  const setYaml = v => {
+    const ta = $('#pl-yaml');
+    if (!ta) return;
+    ta.value = v;
+    ta.dispatchEvent(new Event('input'));
+  };
   $$('#pl-examples .ds-list-item').forEach(el => {
     el.addEventListener('click', () => {
       $$('#pl-examples .ds-list-item').forEach(x => x.classList.remove('active'));
       el.classList.add('active');
-      $('#pl-yaml').value = plBundledCache[el.dataset.name];
+      setYaml(plBundledCache[el.dataset.name]);
     });
   });
   if (!$('#pl-yaml').value) {
-    $('#pl-yaml').value = plBundledCache[names[0]];
+    setYaml(plBundledCache[names[0]]);
     $('#pl-examples .ds-list-item')?.classList.add('active');
   }
 }
@@ -5893,8 +5902,10 @@ function pbCleanEntry(entry, scope) {
 // -- Round-trip helpers -------------------------------------------------
 function pbPushToRun() {
   const y = pbToYaml();
-  if (!$('#pl-yaml')) return;
-  $('#pl-yaml').value = y;
+  const ta = $('#pl-yaml');
+  if (!ta) return;
+  ta.value = y;
+  ta.dispatchEvent(new Event('input'));   // refresh copy-as-curl preview
   const runTab = document.querySelector('[data-view="pl-run"]');
   if (runTab) runTab.click();
   pbStatus('sent to Run tab · click ▶ Run', 'ok');
@@ -6277,14 +6288,89 @@ document.addEventListener('DOMContentLoaded', () => {
     runDistBtn.addEventListener('click',
         () => submitRun('/mesh/jobs/run-distributed', runDistBtn, '▶ Run distributed', 'distributed'));
   }
+  wirePipelineRequestPreview();
 });
+
+/**
+ * Live preview of the HTTP request the ▶ Run / ▶ Run distributed
+ * buttons would fire, rendered as a shell-safe `curl` (heredoc) or a
+ * JetBrains IntelliJ / VS Code REST Client `.http` block. Users copy
+ * this to reproduce the same submission from a terminal or `.http`
+ * scratch file without leaving the UI.
+ *
+ * Endpoint follows the selected mode (local → /mesh/jobs/run,
+ * distributed → /mesh/jobs/run-distributed). Body is the YAML from
+ * the editor verbatim.
+ */
+function updatePipelineRequestPreview() {
+  const pre = $('#pl-request-preview');
+  if (!pre) return;
+  const fmt  = (document.querySelector('input[name="pl-req-fmt"]:checked')?.value)  || 'curl';
+  const mode = (document.querySelector('input[name="pl-req-mode"]:checked')?.value) || 'local';
+  const yaml = ($('#pl-yaml')?.value || '# paste or load a pipeline YAML above\n').trimEnd() + '\n';
+  const origin = window.location.origin;
+  const path = mode === 'distributed' ? '/mesh/jobs/run-distributed' : '/mesh/jobs/run';
+  const url = origin + path;
+  let text;
+  if (fmt === 'http') {
+    // IntelliJ / VS Code REST Client format — the blank line after
+    // headers is required; the YAML then reads until the next ### or EOF.
+    text =
+      `### ${mode === 'distributed' ? 'Distributed' : 'Local'} pipeline run\n` +
+      `POST ${url}\n` +
+      `Content-Type: application/x-yaml\n\n` +
+      yaml;
+  } else {
+    // curl with a bash heredoc — safest way to embed multi-line YAML
+    // that may contain single quotes, backticks, $ signs, etc. The
+    // 'YAML' delimiter is single-quoted so bash doesn't expand $vars
+    // inside the payload.
+    text =
+      `curl -sS -X POST '${url}' \\\n` +
+      `  -H 'content-type: application/x-yaml' \\\n` +
+      `  --data-binary @- <<'YAML'\n` +
+      yaml +
+      `YAML`;
+  }
+  pre.textContent = text;
+}
+
+function wirePipelineRequestPreview() {
+  const editor = $('#pl-yaml');
+  if (editor && !editor._reqPreviewWired) {
+    editor._reqPreviewWired = true;
+    editor.addEventListener('input', updatePipelineRequestPreview);
+  }
+  document.querySelectorAll('input[name="pl-req-fmt"], input[name="pl-req-mode"]').forEach(r => {
+    if (r._reqPreviewWired) return;
+    r._reqPreviewWired = true;
+    r.addEventListener('change', updatePipelineRequestPreview);
+  });
+  const copyBtn = $('#pl-req-copy');
+  if (copyBtn && !copyBtn._wired) {
+    copyBtn._wired = true;
+    copyBtn.addEventListener('click', async () => {
+      const txt = $('#pl-request-preview')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(txt);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = '✓ copied';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+      } catch (_) { plToast('clipboard blocked — select the box and Cmd-C', 'warn'); }
+    });
+  }
+  // Prime it once so the preview isn't empty before the user types.
+  updatePipelineRequestPreview();
+}
 
 async function submitRun(endpoint, btn, label, mode) {
   let yaml = $('#pl-yaml').value.trim();
   if (!yaml && plBundledCache && Object.keys(plBundledCache).length) {
     const firstName = Object.keys(plBundledCache)[0];
     yaml = plBundledCache[firstName];
-    $('#pl-yaml').value = yaml;
+    const ta = $('#pl-yaml');
+    ta.value = yaml;
+    ta.dispatchEvent(new Event('input'));   // refresh copy-as-curl preview
     plToast(`auto-loaded "${firstName}" example — click again if you want a different one`, 'warn');
   }
   if (!yaml) {
