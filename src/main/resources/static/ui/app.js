@@ -4099,11 +4099,18 @@ function wireStageBuilder() {
     el.addEventListener('change', updateQueryPreview);
   });
   // curl / .http format + coordinator / simple GET toggles — refresh
-  // the request preview when either changes.
+  // the request preview when either changes. Style radios also flag
+  // themselves as "user picked" so the stages-based auto-select stops
+  // overriding once the user has expressed a preference.
   document.querySelectorAll('input[name="req-fmt"], input[name="req-style"]').forEach(r => {
     if (r._wiredPreview) return;
     r._wiredPreview = true;
-    r.addEventListener('change', updateRequestPreview);
+    r.addEventListener('change', () => {
+      if (r.name === 'req-style') {
+        document.querySelectorAll('input[name="req-style"]').forEach(x => x._userPicked = true);
+      }
+      updateRequestPreview();
+    });
   });
   // 📋 copy — grabs whatever curl / .http text is currently rendered.
   const copyBtn = $('#search-req-copy');
@@ -4190,7 +4197,27 @@ function updateRequestPreview() {
   const pre = $('#search-request-preview');
   if (!pre) return;
   const fmt   = (document.querySelector('input[name="req-fmt"]:checked')?.value)   || 'curl';
-  const style = (document.querySelector('input[name="req-style"]:checked')?.value) || 'coord';
+  // Auto-select style: if the user has any stage checked (fetch/fixup/
+  // page/summarize), the simple GET can't carry them so default to
+  // coordinator. Otherwise default to simple GET which works on the
+  // driver out-of-the-box without needing fleet-retrieval running.
+  // Explicit radio override wins if the user has clicked one.
+  const stagesChecked = !!(
+    $('#stage-fetch')?.checked ||
+    $('#stage-fixup')?.checked ||
+    $('#stage-page')?.checked ||
+    $('#stage-summarize')?.checked
+  );
+  // Reflect stage state onto the radios when the user hasn't explicitly
+  // picked one — flag lives on the input so the flip is one-way once
+  // the user has interacted. Without this the initial "simple" default
+  // would stick even after checking "fetch" etc.
+  const styleRadios = document.querySelectorAll('input[name="req-style"]');
+  const explicit = Array.from(styleRadios).some(r => r._userPicked);
+  if (!explicit) {
+    styleRadios.forEach(r => { r.checked = (r.value === (stagesChecked ? 'coord' : 'simple')); });
+  }
+  const style = document.querySelector('input[name="req-style"]:checked')?.value || 'simple';
   const fleet = fleetBase();
   const idx = ($('#search-index')?.value || '<pick-an-index>').trim();
   const q = ($('#search-q')?.value || '').trim();
@@ -6503,49 +6530,66 @@ function updatePipelineOutputPreview() {
 
   const blocks = sinks.map(sink => {
     if (sink.kind === 'jvs-lucene' || sink.kind === 'lucene') {
-      // Coordinator POST with a minimal-but-runnable JVS query body.
-      const url = `${fleet}/api/retrieval/execute`;
-      const body = {
+      // Two ways to hit a Lucene index — default to the DRIVER's
+      // /mesh/search endpoint because it ships with every mesh
+      // install (no fleet-retrieval required). Coordinator alt is
+      // shown inline as an optional block for users who need
+      // fetch/fixup/page/summarize stages.
+      const simpleUrl = `${driver}/mesh/search/${encodeURIComponent(sink.name)}?q=*:*&limit=20`;
+      const coordUrl  = `${fleet}/api/retrieval/execute`;
+      const coordBody = {
         indexName: sink.name,
         query: {
           search: {query: '*:*', offset: 0, limit: 20, lang: 'en', facets: []}
-          // Uncomment stages as needed — fetch:{}, fixup:{tags:['basic']},
-          // page:{rows:10,page:0}, summarize:{maxDocs:10,maxWords:200}
+          // Add fetch:{}, fixup:{tags:['basic']}, page:{rows:10,page:0},
+          // or summarize:{maxDocs:10,maxWords:200} to enable stages.
         }
       };
-      const pretty = JSON.stringify(body, null, 2);
+      const pretty = JSON.stringify(coordBody, null, 2);
       if (fmt === 'http') {
-        return `### Search Lucene index "${sink.name}" (via coordinator)\n` +
-               `POST ${url}\n` +
+        return `### Search Lucene index "${sink.name}" (driver, no stages)\n` +
+               `GET ${simpleUrl}\n` +
+               `Accept: application/json\n\n` +
+               `### OR — via coordinator (needs fleet-retrieval on ${fleet})\n` +
+               `POST ${coordUrl}\n` +
                `Content-Type: application/json\n\n` +
                `${pretty}\n`;
       }
       const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
-      return `# Search Lucene index "${sink.name}" via coordinator\n` +
-             `curl -sS -X POST '${url}' \\\n` +
+      return `# Search Lucene index "${sink.name}" — driver's built-in endpoint (always works)\n` +
+             `curl -sS '${simpleUrl}'\n\n` +
+             `# OR via coordinator with full stages — needs fleet-retrieval on ${fleet}\n` +
+             `curl -sS -X POST '${coordUrl}' \\\n` +
              `  -H 'content-type: application/json' \\\n` +
              `  -d ${shellQuoted}`;
     }
     if (sink.kind === 'kvstore') {
       // Federated KV — /mesh/retrieval/federated/kv/{index}/{key}
-      // (single fetch) + /scan (streaming NDJSON scan). {key}
-      // placeholder is up to the user — no way to know one until the
-      // pipeline runs. keyExpr shown in a comment for context.
+      // (single fetch) + /scan (streaming NDJSON scan). The driver
+      // relays these to fleet-retrieval endpoints, so it returns
+      // 503 "no fleet-retrieval endpoints discovered" until at
+      // least one fleet node is registered. Note that in the header.
       const single = `${driver}/mesh/retrieval/federated/kv/${encodeURIComponent(sink.name)}/{key}`;
       const scan   = `${driver}/mesh/retrieval/federated/kv/${encodeURIComponent(sink.name)}/scan`;
+      const kvNote = `# NOTE: KV read requires fleet-retrieval running + registered with the driver.\n` +
+                     `# Without a fleet node the driver returns 503 "no fleet-retrieval endpoints discovered".\n` +
+                     `# For now the sink writes to ~/.hitorro/pipelines/kv/${sink.name}/ (RocksDB) and\n` +
+                     `# is consumable in-process via source:{kind:kvstore,name:${sink.name}} in another pipeline.\n`;
       if (fmt === 'http') {
-        return `### Fetch a single value from KV store "${sink.name}"` +
+        return `### Fetch one value from KV store "${sink.name}"` +
                (sink.keyExpr ? ` (keyExpr: ${sink.keyExpr})` : '') + '\n' +
-               `# Replace {key} with an actual key from your pipeline output\n` +
+               kvNote.replace(/^# /gm, '# ') +
+               `# Replace {key} with an actual key from your pipeline output.\n` +
                `GET ${single}\n` +
                `Accept: application/json\n\n` +
                `### Scan every value in KV store "${sink.name}" (NDJSON stream)\n` +
                `GET ${scan}\n` +
                `Accept: application/x-ndjson\n`;
       }
-      return `# Fetch a single value from KV store "${sink.name}"` +
+      return `# Fetch one value from KV store "${sink.name}"` +
              (sink.keyExpr ? ` (keyExpr: ${sink.keyExpr})` : '') + '\n' +
-             `# Replace {key} with an actual key from your pipeline output\n` +
+             kvNote +
+             `# Replace {key} with an actual key from your pipeline output.\n` +
              `curl -sS '${single}'\n\n` +
              `# Scan every value in KV store "${sink.name}" (NDJSON stream)\n` +
              `curl -sS '${scan}'`;

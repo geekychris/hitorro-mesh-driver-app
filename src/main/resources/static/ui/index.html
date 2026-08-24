@@ -1208,12 +1208,15 @@
             </summary>
             <div style="padding: 0.4rem 0 0;">
               <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.3rem; flex-wrap: wrap;">
-                <label title="POST /api/retrieval/execute with the full JVS query — supports every stage (search + fetch + fixup + page + summarize)">
-                  <input type="radio" name="req-style" value="coord" checked/> coordinator (POST + full JVS)
+                <label title="GET /mesh/search/{index}?q=… on the driver — works out of the box. Stages are ignored.">
+                  <input type="radio" name="req-style" value="simple" checked/> simple GET (driver, no stages)
                 </label>
-                <label title="GET /mesh/search/{index}?q=… — driver's Lucene-only shortcut. Stages are ignored.">
-                  <input type="radio" name="req-style" value="simple"/> simple GET (no stages)
+                <label title="POST /api/retrieval/execute — full JVS query with every stage. Requires fleet-retrieval running on the URL below.">
+                  <input type="radio" name="req-style" value="coord"/> coordinator (POST + full JVS)
                 </label>
+                <small class="meta" style="margin-left:0.4rem;">
+                  auto-picks coordinator when any stage below is checked
+                </small>
               </div>
               <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem; flex-wrap: wrap;">
                 <label><input type="radio" name="req-fmt" value="curl" checked/> curl</label>
@@ -1473,6 +1476,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260824e"></script>
+<script src="app.js?v=20260824f"></script>
 </body>
 </html>
