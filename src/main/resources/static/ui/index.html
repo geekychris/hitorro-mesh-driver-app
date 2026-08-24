@@ -957,6 +957,32 @@
             </div>
           </details>
 
+          <details id="pl-outputs-panel" hidden style="margin: 0 0 0.6rem; border: 1px solid var(--muted-border-color, #d0d0d0); border-radius: 6px; padding: 0.4rem 0.6rem; background: var(--card-sectioning-background-color, #fafafa);">
+            <summary style="cursor:pointer; font-weight: 600; font-size: 0.85rem; padding: 0.15rem 0;">
+              🔍 Query the pipeline outputs — auto-detected from <code>sinks:</code>
+            </summary>
+            <div style="padding: 0.4rem 0 0;">
+              <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem; flex-wrap: wrap;">
+                <label><input type="radio" name="pl-out-fmt" value="curl" checked/> curl</label>
+                <label><input type="radio" name="pl-out-fmt" value="http"/> IntelliJ <code>.http</code></label>
+                <span style="flex:1"></span>
+                <button id="pl-out-copy" type="button" class="secondary outline"
+                        style="padding: 0.15rem 0.7rem; font-size: 0.8rem; margin: 0;"
+                        title="Copy all snippets to clipboard">📋 copy all</button>
+              </div>
+              <pre id="pl-output-preview" style="font-size:0.72rem; margin:0;
+                   max-height:320px; overflow:auto; padding:0.4rem 0.55rem;
+                   background: #fff; border: 1px solid var(--muted-border-color, #e0e0e0); border-radius:4px;
+                   white-space:pre; user-select:all;"></pre>
+              <small class="meta" style="display:block; margin-top:0.35rem;">
+                One snippet per output sink — Lucene sinks get the coordinator
+                POST (full JVS query with all stages), KV sinks get single-key
+                GET + streaming scan. Coordinator URL comes from Search →
+                Backend → Fleet URL (default <code>http://localhost:8090</code>).
+              </small>
+            </div>
+          </details>
+
           <div id="pl-status" hidden
                style="margin-top: 0.75rem; padding: 0.6rem 0.8rem; border: 2px solid var(--primary-mesh, #3af); border-radius: 6px; background: rgba(51, 170, 255, 0.06); box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
             <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
@@ -1447,6 +1473,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260824d"></script>
+<script src="app.js?v=20260824e"></script>
 </body>
 </html>

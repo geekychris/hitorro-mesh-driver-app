@@ -4215,10 +4215,11 @@ function updateRequestPreview() {
     }
   } else {
     // Coordinator — the full JVS query pipeline (search + optional
-    // fetch/fixup/page/summarize). Points at the fleet-retrieval URL
-    // when configured, else at a self-descriptive placeholder so users
-    // know what to fill in.
-    const url = (fleet ? fleet : 'http://<fleet-retrieval-host>') + '/api/retrieval/execute';
+    // fetch/fixup/page/summarize). Always emit a concrete URL —
+    // resolveFleetUrl() reads the Search page's fleet-URL field
+    // (default http://localhost:8090) so the copied curl works
+    // immediately without any hand-edit.
+    const url = resolveFleetUrl() + '/api/retrieval/execute';
     const body = {indexName: idx, query: buildRetrievalQuery()};
     const pretty = JSON.stringify(body, null, 2);
     if (fmt === 'http') {
@@ -4271,6 +4272,19 @@ function fleetBase() {
   const sel = $('#search-backend');
   if (!sel || sel.value !== 'fleet') return null;
   return ($('#search-fleet-url').value || '').replace(/\/+$/, '');
+}
+
+/**
+ * Resolve the fleet-retrieval coordinator URL for preview purposes,
+ * independent of the Backend selector. The Search page's fleet-URL
+ * field is always populated (defaults to http://localhost:8090) so
+ * copy-request previews always render a concrete, immediately-usable
+ * URL rather than an <angle-bracket-placeholder>. Any trailing
+ * slashes are trimmed so we can safely append endpoint paths.
+ */
+function resolveFleetUrl() {
+  const raw = ($('#search-fleet-url')?.value || 'http://localhost:8090').trim();
+  return raw.replace(/\/+$/, '') || 'http://localhost:8090';
 }
 
 async function loadSearchIndexes() {
@@ -6353,12 +6367,20 @@ function wirePipelineRequestPreview() {
   const editor = $('#pl-yaml');
   if (editor && !editor._reqPreviewWired) {
     editor._reqPreviewWired = true;
-    editor.addEventListener('input', updatePipelineRequestPreview);
+    editor.addEventListener('input', () => {
+      updatePipelineRequestPreview();
+      updatePipelineOutputPreview();
+    });
   }
   document.querySelectorAll('input[name="pl-req-fmt"], input[name="pl-req-mode"]').forEach(r => {
     if (r._reqPreviewWired) return;
     r._reqPreviewWired = true;
     r.addEventListener('change', updatePipelineRequestPreview);
+  });
+  document.querySelectorAll('input[name="pl-out-fmt"]').forEach(r => {
+    if (r._outPreviewWired) return;
+    r._outPreviewWired = true;
+    r.addEventListener('change', updatePipelineOutputPreview);
   });
   const copyBtn = $('#pl-req-copy');
   if (copyBtn && !copyBtn._wired) {
@@ -6373,8 +6395,165 @@ function wirePipelineRequestPreview() {
       } catch (_) { plToast('clipboard blocked — select the box and Cmd-C', 'warn'); }
     });
   }
-  // Prime it once so the preview isn't empty before the user types.
+  const outCopyBtn = $('#pl-out-copy');
+  if (outCopyBtn && !outCopyBtn._wired) {
+    outCopyBtn._wired = true;
+    outCopyBtn.addEventListener('click', async () => {
+      const txt = $('#pl-output-preview')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(txt);
+        const orig = outCopyBtn.textContent;
+        outCopyBtn.textContent = '✓ copied';
+        setTimeout(() => { outCopyBtn.textContent = orig; }, 1200);
+      } catch (_) { plToast('clipboard blocked — select the box and Cmd-C', 'warn'); }
+    });
+  }
+  // Prime both previews so they aren't empty before the user types.
   updatePipelineRequestPreview();
+  updatePipelineOutputPreview();
+}
+
+/**
+ * Tiny sink extractor for the pipeline YAML — we don't need a full
+ * YAML parser, just a scan for `kind:` / `name:` / `keyExpr:` pairs
+ * inside the `sinks:` list. Returns an array of
+ * {kind, name, keyExpr} in document order. Handles both jvs-lucene
+ * and plain lucene sinks (both queryable via /mesh/search/{name})
+ * and kvstore sinks. Unknown sinks are skipped so the caller can
+ * treat "no matches" as "no queryable output".
+ */
+function parsePipelineOutputSinks(yaml) {
+  if (!yaml) return [];
+  const lines = yaml.split('\n');
+  const out = [];
+  const KINDS = new Set(['jvs-lucene', 'lucene', 'kvstore']);
+  let inSinks = false, sinksIndent = -1;
+  let cur = null;
+  const pushCur = () => { if (cur && cur.name) out.push(cur); cur = null; };
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw.trim() || raw.trim().startsWith('#')) continue;
+    const indent = raw.match(/^\s*/)[0].length;
+    const trimmed = raw.trim();
+
+    if (/^sinks:\s*(#.*)?$/.test(trimmed)) {
+      inSinks = true; sinksIndent = indent;
+      pushCur();
+      continue;
+    }
+    if (inSinks && indent <= sinksIndent && !/^-\s/.test(trimmed)) {
+      // A sibling key at or above the `sinks:` indent ends the block.
+      pushCur();
+      inSinks = false;
+      continue;
+    }
+    if (!inSinks) continue;
+
+    // New list item — start a fresh sink record. May be a flow-style
+    // one-liner ({kind: X, name: Y}) or block-style spanning lines.
+    const item = trimmed.match(/^-\s+(.+)$/);
+    if (item) {
+      pushCur();
+      cur = {kind: null, name: null, keyExpr: null};
+      const inline = item[1];
+      // Flow-style: `- {kind: jvs-lucene, name: X}`
+      const flow = inline.match(/^\{([^}]*)\}$/);
+      if (flow) {
+        flow[1].split(',').forEach(p => {
+          const m = p.match(/([a-zA-Z_-]+)\s*:\s*"?([^",}]+)"?/);
+          if (m) cur[m[1]] = m[2].trim();
+        });
+      } else {
+        // Block-style — first key/value on the "- " line itself.
+        const m = inline.match(/^([a-zA-Z_-]+)\s*:\s*"?([^"#]*?)"?\s*(#.*)?$/);
+        if (m) cur[m[1]] = m[2].trim();
+      }
+      continue;
+    }
+    // Continuation lines within the current sink.
+    if (cur) {
+      const kv = trimmed.match(/^([a-zA-Z_-]+)\s*:\s*"?([^"#]*?)"?\s*(#.*)?$/);
+      if (kv) cur[kv[1]] = kv[2].trim();
+    }
+  }
+  pushCur();
+  return out.filter(s => KINDS.has(s.kind) && s.name);
+}
+
+/**
+ * Render curl / .http snippets — one per output sink — that hit the
+ * fleet-retrieval coordinator (for Lucene indexes) or the driver's
+ * federated KV endpoint (for kvstore sinks). Hidden entirely when
+ * the current YAML has no queryable sinks; expanded and populated
+ * as soon as at least one appears.
+ */
+function updatePipelineOutputPreview() {
+  const panel = $('#pl-outputs-panel');
+  const pre = $('#pl-output-preview');
+  if (!panel || !pre) return;
+  const yaml = $('#pl-yaml')?.value || '';
+  const sinks = parsePipelineOutputSinks(yaml);
+  if (!sinks.length) { panel.hidden = true; pre.textContent = ''; return; }
+  panel.hidden = false;
+
+  const fmt = (document.querySelector('input[name="pl-out-fmt"]:checked')?.value) || 'curl';
+  const fleet = resolveFleetUrl();
+  const driver = window.location.origin;
+
+  const blocks = sinks.map(sink => {
+    if (sink.kind === 'jvs-lucene' || sink.kind === 'lucene') {
+      // Coordinator POST with a minimal-but-runnable JVS query body.
+      const url = `${fleet}/api/retrieval/execute`;
+      const body = {
+        indexName: sink.name,
+        query: {
+          search: {query: '*:*', offset: 0, limit: 20, lang: 'en', facets: []}
+          // Uncomment stages as needed — fetch:{}, fixup:{tags:['basic']},
+          // page:{rows:10,page:0}, summarize:{maxDocs:10,maxWords:200}
+        }
+      };
+      const pretty = JSON.stringify(body, null, 2);
+      if (fmt === 'http') {
+        return `### Search Lucene index "${sink.name}" (via coordinator)\n` +
+               `POST ${url}\n` +
+               `Content-Type: application/json\n\n` +
+               `${pretty}\n`;
+      }
+      const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
+      return `# Search Lucene index "${sink.name}" via coordinator\n` +
+             `curl -sS -X POST '${url}' \\\n` +
+             `  -H 'content-type: application/json' \\\n` +
+             `  -d ${shellQuoted}`;
+    }
+    if (sink.kind === 'kvstore') {
+      // Federated KV — /mesh/retrieval/federated/kv/{index}/{key}
+      // (single fetch) + /scan (streaming NDJSON scan). {key}
+      // placeholder is up to the user — no way to know one until the
+      // pipeline runs. keyExpr shown in a comment for context.
+      const single = `${driver}/mesh/retrieval/federated/kv/${encodeURIComponent(sink.name)}/{key}`;
+      const scan   = `${driver}/mesh/retrieval/federated/kv/${encodeURIComponent(sink.name)}/scan`;
+      if (fmt === 'http') {
+        return `### Fetch a single value from KV store "${sink.name}"` +
+               (sink.keyExpr ? ` (keyExpr: ${sink.keyExpr})` : '') + '\n' +
+               `# Replace {key} with an actual key from your pipeline output\n` +
+               `GET ${single}\n` +
+               `Accept: application/json\n\n` +
+               `### Scan every value in KV store "${sink.name}" (NDJSON stream)\n` +
+               `GET ${scan}\n` +
+               `Accept: application/x-ndjson\n`;
+      }
+      return `# Fetch a single value from KV store "${sink.name}"` +
+             (sink.keyExpr ? ` (keyExpr: ${sink.keyExpr})` : '') + '\n' +
+             `# Replace {key} with an actual key from your pipeline output\n` +
+             `curl -sS '${single}'\n\n` +
+             `# Scan every value in KV store "${sink.name}" (NDJSON stream)\n` +
+             `curl -sS '${scan}'`;
+    }
+    return null;
+  }).filter(Boolean);
+
+  pre.textContent = blocks.join('\n\n');
 }
 
 async function submitRun(endpoint, btn, label, mode) {
