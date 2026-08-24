@@ -4246,11 +4246,26 @@ function updateRequestPreview() {
     // resolveFleetUrl() reads the Search page's fleet-URL field
     // (default http://localhost:8090) so the copied curl works
     // immediately without any hand-edit.
-    const url = resolveFleetUrl() + '/api/retrieval/execute';
+    const base = resolveFleetUrl();
+    const url = base + '/api/retrieval/execute';
+    const reachable = fleetReachable(base);
+    const warnHeader = reachable === false ? (
+      fmt === 'http'
+        ? `### ⚠ WARNING — coordinator UNREACHABLE at ${base}\n` +
+          `#   fleet-retrieval's /api/retrieval/health returned an error or connection failed.\n` +
+          `#   Copying this request will 404 unless you start fleet-retrieval on that URL.\n` +
+          `#   Alternative: switch to "simple GET" above — the driver's built-in Lucene\n` +
+          `#   endpoint at /mesh/search/{index} works out of the box (no stages though).\n\n`
+        : `# ⚠ WARNING — coordinator UNREACHABLE at ${base}\n` +
+          `#   fleet-retrieval's /api/retrieval/health returned an error or connection failed.\n` +
+          `#   Copying this request will 404 unless you start fleet-retrieval on that URL.\n` +
+          `#   Alternative: switch to "simple GET" above — the driver's built-in Lucene\n` +
+          `#   endpoint at /mesh/search/{index} works out of the box (no stages though).\n\n`
+    ) : '';
     const body = {indexName: idx, query: buildRetrievalQuery()};
     const pretty = JSON.stringify(body, null, 2);
     if (fmt === 'http') {
-      text =
+      text = warnHeader +
         `### Coordinator retrieval — ${idx}\n` +
         `POST ${url}\n` +
         `Content-Type: application/json\n\n` +
@@ -4259,7 +4274,7 @@ function updateRequestPreview() {
       // Single-quote the JSON body and escape any embedded single
       // quotes (bash-safe: close ', insert \', re-open ').
       const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
-      text =
+      text = warnHeader +
         `curl -sS -X POST '${url}' \\\n` +
         `  -H 'content-type: application/json' \\\n` +
         `  -d ${shellQuoted}`;
@@ -4312,6 +4327,43 @@ function fleetBase() {
 function resolveFleetUrl() {
   const raw = ($('#search-fleet-url')?.value || 'http://localhost:8090').trim();
   return raw.replace(/\/+$/, '') || 'http://localhost:8090';
+}
+
+/**
+ * Cached fleet-retrieval reachability probe. Result keyed by URL so
+ * the user can flip the fleet-URL field and get a fresh check. Values:
+ *   undefined → not probed yet (assume reachable, no warning shown)
+ *   true      → last probe returned a 2xx
+ *   false     → last probe failed (network error, 4xx, 5xx)
+ *
+ * The probe is fire-and-forget: on first call it kicks the fetch off
+ * and returns undefined. When the fetch resolves, subsequent preview
+ * updates render the correct warning. re-render triggered by refetch
+ * completion so the user doesn't have to touch a control.
+ */
+const _fleetReachable = {};   // url → boolean
+const _fleetInflight  = {};   // url → true while a probe is in flight
+function fleetReachable(url) {
+  if (_fleetReachable[url] !== undefined) return _fleetReachable[url];
+  if (_fleetInflight[url]) return undefined;
+  _fleetInflight[url] = true;
+  // /api/retrieval/health is the fleet-retrieval liveness endpoint.
+  // Use no-cors + a short timeout so a misbehaving server (e.g. the
+  // "endpoint not found" squatter on :8090) doesn't hang the UI.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 1500);
+  fetch(url + '/api/retrieval/health', {method: 'GET', signal: ctrl.signal})
+    .then(r => { _fleetReachable[url] = r.ok; })
+    .catch(() => { _fleetReachable[url] = false; })
+    .finally(() => {
+      clearTimeout(timer);
+      _fleetInflight[url] = false;
+      // Repaint any preview currently on-screen so the warning shows
+      // without user interaction. Both preview functions are idempotent.
+      try { updateRequestPreview(); }         catch (_) {}
+      try { updatePipelineOutputPreview(); }  catch (_) {}
+    });
+  return undefined;
 }
 
 async function loadSearchIndexes() {
@@ -6527,6 +6579,15 @@ function updatePipelineOutputPreview() {
   const fmt = (document.querySelector('input[name="pl-out-fmt"]:checked')?.value) || 'curl';
   const fleet = resolveFleetUrl();
   const driver = window.location.origin;
+  const coordReachable = fleetReachable(fleet);
+  // Prefix any coordinator/KV-federated snippet with a warning when
+  // fleet-retrieval isn't reachable. Users copying this into a .http
+  // scratch will otherwise get "endpoint not found" and blame the UI.
+  const coordWarn = coordReachable === false
+    ? `# ⚠ fleet-retrieval UNREACHABLE at ${fleet} — the coordinator + federated-KV\n` +
+      `#   snippets below will 404 until you start it. The driver's /mesh/search/{name}\n` +
+      `#   snippet at the top of each Lucene block works without fleet-retrieval.\n\n`
+    : '';
 
   const blocks = sinks.map(sink => {
     if (sink.kind === 'jvs-lucene' || sink.kind === 'lucene') {
@@ -6597,7 +6658,7 @@ function updatePipelineOutputPreview() {
     return null;
   }).filter(Boolean);
 
-  pre.textContent = blocks.join('\n\n');
+  pre.textContent = coordWarn + blocks.join('\n\n');
 }
 
 async function submitRun(endpoint, btn, label, mode) {
