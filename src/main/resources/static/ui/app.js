@@ -4098,8 +4098,9 @@ function wireStageBuilder() {
     el.addEventListener('input', updateQueryPreview);
     el.addEventListener('change', updateQueryPreview);
   });
-  // curl / .http format toggle — refresh the request preview when it changes.
-  document.querySelectorAll('input[name="req-fmt"]').forEach(r => {
+  // curl / .http format + coordinator / simple GET toggles — refresh
+  // the request preview when either changes.
+  document.querySelectorAll('input[name="req-fmt"], input[name="req-style"]').forEach(r => {
     if (r._wiredPreview) return;
     r._wiredPreview = true;
     r.addEventListener('change', updateRequestPreview);
@@ -4168,59 +4169,72 @@ function updateQueryPreview() {
 }
 
 /**
- * Live preview of the HTTP request the search page would fire,
- * rendered as either a shell-safe `curl` command or a JetBrains
- * IntelliJ / VS Code REST Client `.http` file. Users can copy-paste
- * to reproduce the same query outside the UI.
+ * Live preview of the HTTP request the search page would fire.
  *
- * Local backend → GET /mesh/search/{index}?q=…&limit=…
- * Fleet backend → POST {fleetUrl}/api/retrieval/execute + JSON body
+ * The RIGHT target is always the retrieval coordinator at
+ * {@code POST /api/retrieval/execute} — it takes a JVS query with
+ * {@code search}/{@code fetch}/{@code fixup}/{@code page}/{@code summarize}
+ * stages, exactly what the UI's stage builder assembles. The driver's
+ * bare {@code GET /mesh/search/{index}?q=…} endpoint is a Lucene-only
+ * shortcut with no stage support, so previewing it would mislead
+ * anyone reproducing the full pipeline outside the UI. Two modes:
+ *
+ *  · "coordinator" (default) — POST to the fleet-retrieval service
+ *    ({@code {fleet}/api/retrieval/execute}), body is the full JVS
+ *    query. Always the correct target when any stage is checked.
+ *
+ *  · "simple GET" (opt-in) — the driver's in-process shortcut when
+ *    the user is only doing a plain Lucene search with no stages.
  */
 function updateRequestPreview() {
   const pre = $('#search-request-preview');
   if (!pre) return;
-  const fmt = (document.querySelector('input[name="req-fmt"]:checked')?.value) || 'curl';
+  const fmt   = (document.querySelector('input[name="req-fmt"]:checked')?.value)   || 'curl';
+  const style = (document.querySelector('input[name="req-style"]:checked')?.value) || 'coord';
   const fleet = fleetBase();
   const idx = ($('#search-index')?.value || '<pick-an-index>').trim();
   const q = ($('#search-q')?.value || '').trim();
   const lim = parseInt($('#search-limit')?.value, 10) || 20;
 
   let text;
-  if (fleet) {
-    const url  = `${fleet}/api/retrieval/execute`;
-    const body = {indexName: idx, query: buildRetrievalQuery()};
-    const pretty = JSON.stringify(body, null, 2);
-    if (fmt === 'http') {
-      text =
-        `### Fleet retrieval — ${idx}\n` +
-        `POST ${url}\n` +
-        `Content-Type: application/json\n\n` +
-        `${pretty}\n`;
-    } else {
-      // Single-quote the JSON body and escape any embedded single quotes.
-      // Bash-safe: '...' interpolates nothing, and closing/re-opening
-      // around \' is the standard trick.
-      const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
-      text =
-        `curl -sS -X POST '${url}' \\\n` +
-        `  -H 'content-type: application/json' \\\n` +
-        `  -d ${shellQuoted}`;
-    }
-  } else {
-    // Local backend — GET on the in-driver search service.
-    const origin = window.location.origin;   // http://host:port
+  if (style === 'simple') {
+    // Driver's Lucene-only shortcut. Stages are ignored server-side —
+    // useful only for a plain query.
+    const origin = window.location.origin;
     const params = new URLSearchParams();
     params.set('q', q);
     params.set('limit', String(lim));
     const url = `${origin}/mesh/search/${encodeURIComponent(idx)}?${params.toString()}`;
     if (fmt === 'http') {
       text =
-        `### Search ${idx}\n` +
+        `### Simple Lucene search — ${idx} (no stages)\n` +
         `GET ${url}\n` +
         `Accept: application/json\n`;
     } else {
-      // Single-quote the whole URL — shell won't interpret & or ?.
       text = `curl -sS '${url}'`;
+    }
+  } else {
+    // Coordinator — the full JVS query pipeline (search + optional
+    // fetch/fixup/page/summarize). Points at the fleet-retrieval URL
+    // when configured, else at a self-descriptive placeholder so users
+    // know what to fill in.
+    const url = (fleet ? fleet : 'http://<fleet-retrieval-host>') + '/api/retrieval/execute';
+    const body = {indexName: idx, query: buildRetrievalQuery()};
+    const pretty = JSON.stringify(body, null, 2);
+    if (fmt === 'http') {
+      text =
+        `### Coordinator retrieval — ${idx}\n` +
+        `POST ${url}\n` +
+        `Content-Type: application/json\n\n` +
+        `${pretty}\n`;
+    } else {
+      // Single-quote the JSON body and escape any embedded single
+      // quotes (bash-safe: close ', insert \', re-open ').
+      const shellQuoted = "'" + pretty.replace(/'/g, "'\\''") + "'";
+      text =
+        `curl -sS -X POST '${url}' \\\n` +
+        `  -H 'content-type: application/json' \\\n` +
+        `  -d ${shellQuoted}`;
     }
   }
   pre.textContent = text;

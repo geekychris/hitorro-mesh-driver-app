@@ -1181,6 +1181,14 @@
               📋 Copy request — as <code>curl</code> or IntelliJ <code>.http</code> file
             </summary>
             <div style="padding: 0.4rem 0 0;">
+              <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.3rem; flex-wrap: wrap;">
+                <label title="POST /api/retrieval/execute with the full JVS query — supports every stage (search + fetch + fixup + page + summarize)">
+                  <input type="radio" name="req-style" value="coord" checked/> coordinator (POST + full JVS)
+                </label>
+                <label title="GET /mesh/search/{index}?q=… — driver's Lucene-only shortcut. Stages are ignored.">
+                  <input type="radio" name="req-style" value="simple"/> simple GET (no stages)
+                </label>
+              </div>
               <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.35rem; flex-wrap: wrap;">
                 <label><input type="radio" name="req-fmt" value="curl" checked/> curl</label>
                 <label><input type="radio" name="req-fmt" value="http"/> IntelliJ <code>.http</code></label>
@@ -1190,14 +1198,18 @@
                         title="Copy to clipboard">📋 copy</button>
               </div>
               <pre id="search-request-preview" style="font-size:0.72rem; margin:0;
-                   max-height:220px; overflow:auto; padding:0.4rem 0.55rem;
+                   max-height:260px; overflow:auto; padding:0.4rem 0.55rem;
                    background: #fff; border: 1px solid var(--muted-border-color, #e0e0e0); border-radius:4px;
                    white-space:pre; user-select:all;"></pre>
               <small class="meta" style="display:block; margin-top:0.35rem;">
-                Paste into a shell for <code>curl</code>, or into a
-                <code>*.http</code> file (IntelliJ / VS Code REST Client) — hit ▷
-                inline to fire the same request outside the UI. Backend + fields
-                update the preview live.
+                <b>coordinator</b> POSTs the full JVS query to
+                <code>/api/retrieval/execute</code> — the target that supports
+                <code>search</code> + <code>fetch</code> + <code>fixup</code> +
+                <code>page</code> + <code>summarize</code>. When you haven't set a
+                Backend → Fleet URL above the preview shows
+                <code>http://&lt;fleet-retrieval-host&gt;</code> as a placeholder.
+                <br><b>simple GET</b> hits the driver's Lucene-only shortcut;
+                stages are ignored server-side.
               </small>
             </div>
           </details>
@@ -1435,6 +1447,6 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
 
 <!-- ?v=<yyyymmddN> — bump when app.js changes to bust any browser cache
      that ignored `Cache-Control: no-cache` (some Chromes/Safaris do). -->
-<script src="app.js?v=20260824c"></script>
+<script src="app.js?v=20260824d"></script>
 </body>
 </html>
