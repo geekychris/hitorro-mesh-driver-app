@@ -91,6 +91,14 @@ public class FederatedRetrievalController {
             out.put("searchTimeMs", sr.getSearchTimeMs());
             out.put("mergerUsed", merger != null ? merger : "score");
             out.put("fleetsQueried", federated.currentEndpoints().size());
+            // Merged per-source aggregates from the streaming k-way
+            // merger — carries summary/facets/ai_summary with
+            // byIndex.<source> sub-objects. Empty when nothing was
+            // merged (single-source or all-branches-failed).
+            if (sr.hasSourceAggregates()) {
+                out.put("aggregates", sr.getSourceAggregates().stream()
+                        .map(JVS::getJsonNode).toList());
+            }
             out.put("success", true);
         } catch (IllegalArgumentException | IllegalStateException e) {
             out.put("success", false);
