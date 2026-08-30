@@ -276,14 +276,23 @@ public class ScheduleService {
                     x.lastError = status.state == null ? "no state" : status.state.name();
                 }
             });
-            // Advance the checkpoint only on success + only if the job didn't
-            // set an explicit value (via /checkpoint PUT during the run).
+            // Advance the checkpoint only on success. Precedence:
+            //   1. Job-provided override (a step called ctx.setCheckpoint) —
+            //      wins over everything; that's the whole point of the API.
+            //   2. External /checkpoint PUT mid-run — leave whatever the
+            //      operator set alone.
+            //   3. Default: stamp runStart (ISO instant) — the time-cursor
+            //      case that works for "WHERE ts > ${CHECKPOINT}" jobs.
             if (success) {
                 String current = checkpoints.get(s.name).orElse("");
                 Schedule fresh = store.get(s.name).orElse(null);
                 boolean externallyChanged = fresh != null && fresh.checkpoint != null
                         && !fresh.checkpoint.equals(current);
-                if (!externallyChanged) {
+                String jobOverride = status.scheduledCheckpointOverride;
+                if (jobOverride != null) {
+                    checkpoints.put(s.name, jobOverride);
+                    store.update(s.name, x -> x.checkpoint = jobOverride);
+                } else if (!externallyChanged) {
                     String advance = runStart.toString();
                     checkpoints.put(s.name, advance);
                     store.update(s.name, x -> x.checkpoint = advance);

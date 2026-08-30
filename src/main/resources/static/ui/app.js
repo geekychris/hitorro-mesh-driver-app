@@ -890,6 +890,7 @@ function bindTabs(rootSel = '.tabs') {
         if (target === 'search') refreshSearchTab();
         if (target === 'fleet') refreshFleetTab();
         if (target === 'jobs') refreshJobsTab();
+        if (target === 'schedules') refreshSchedules();
         updateInventoryPolling();
       } else if (btn.dataset.view) {
         // Scope view-panel toggling to the nearest section OR article. Playground
@@ -5023,7 +5024,10 @@ function jobRowHtml(j, i) {
         <b>${esc(j.jobSpecName || '?')}</b>
         <br><small class="meta">${esc(j.jobId || '?')}</small>
       </td>
-      <td style="padding:0.3rem;"><span style="color:${color}; font-weight:bold;">${esc(state)}</span></td>
+      <td style="padding:0.3rem;">
+        <span style="color:${color}; font-weight:bold;">${esc(state)}</span>
+        ${lifecycleBadge(j.lifecycle)}
+      </td>
       <td style="padding:0.3rem;"><small title="${esc(startedUtcTitle)}">${esc(startedShort)}</small></td>
       <td style="padding:0.3rem; text-align:right;">${dur}</td>
       <td style="padding:0.3rem; text-align:right;">${nodeCount}</td>
@@ -6928,5 +6932,271 @@ function drawDagArrows(status) {
       svg.appendChild(path);
     }
   }
+}
+
+// ============================================================ LIFECYCLE BADGE
+//
+// Renders a small pill next to a job's state indicating whether the
+// job terminates naturally (finite sources: sqlite, ndjson-file, …)
+// or runs continuously (streaming sources: kafka, nats). Server sets
+// this on the JobStatus snapshot; for schedules we infer client-side
+// by scanning the job YAML for `kind: kafka|nats`.
+
+function lifecycleBadge(lifecycle) {
+  if (lifecycle === 'CONTINUOUS') {
+    return `<span title="Continuous — runs until cancelled (streaming source)"
+                  style="display:inline-block; margin-left:0.35rem; padding:0 0.35rem;
+                         font-size:0.65rem; border-radius:3px; background:#e8f4ff;
+                         color:#1970a8; border:1px solid #b7d7ee;">● continuous</span>`;
+  }
+  if (lifecycle === 'TERMINATING') {
+    return `<span title="Terminating — exits when the source drains"
+                  style="display:inline-block; margin-left:0.35rem; padding:0 0.35rem;
+                         font-size:0.65rem; border-radius:3px; background:#f3f3f3;
+                         color:#666; border:1px solid #ddd;">▪ batch</span>`;
+  }
+  return '';   // unknown / not populated (older snapshots)
+}
+
+/** Infer lifecycle from a job YAML string — used by the Schedules tab
+ *  where the server ships raw YAML, not a parsed spec. Regex-scan for
+ *  `kind: kafka` or `kind: nats` (with optional whitespace/quotes). */
+function inferLifecycleFromYaml(yaml) {
+  if (!yaml) return null;
+  return /\bkind\s*:\s*["']?(kafka|nats)\b/i.test(yaml) ? 'CONTINUOUS' : 'TERMINATING';
+}
+
+// ============================================================ SCHEDULES TAB
+//
+// UI for the durable pipeline scheduler at /mesh/schedules.
+// Schedules run mesh jobs on cron/interval with a persistent
+// per-schedule checkpoint ("last good key") that survives driver
+// restarts and drives ${CHECKPOINT} substitution in job YAML.
+
+let schedTimer = null;
+let schedEditing = null;   // name being edited (null = create)
+
+async function refreshSchedules() {
+  wireSchedulesHandlers();
+  await loadSchedules();
+  scheduleSchedulesPoll();
+}
+
+function scheduleSchedulesPoll() {
+  clearTimeout(schedTimer);
+  schedTimer = setTimeout(() => {
+    if ($('#schedules').classList.contains('active')) loadSchedules();
+    scheduleSchedulesPoll();
+  }, 5000);
+}
+
+function wireSchedulesHandlers() {
+  const btn = $('#sched-refresh');
+  if (btn && !btn._wired) { btn._wired = true; btn.addEventListener('click', loadSchedules); }
+  const nb  = $('#sched-new');
+  if (nb  && !nb._wired)  { nb._wired  = true; nb.addEventListener('click', () => openScheduleDialog(null)); }
+  const close = $('#sched-dialog-close');
+  if (close && !close._wired) { close._wired = true; close.addEventListener('click', () => $('#sched-dialog').close()); }
+  const save = $('#sched-dialog-save');
+  if (save && !save._wired)   { save._wired  = true; save.addEventListener('click', saveScheduleDialog); }
+  const cpCancel = $('#sched-cp-cancel');
+  if (cpCancel && !cpCancel._wired) { cpCancel._wired = true; cpCancel.addEventListener('click', () => $('#sched-cp-dialog').close()); }
+  const cpSave = $('#sched-cp-save');
+  if (cpSave && !cpSave._wired)     { cpSave._wired = true; cpSave.addEventListener('click', saveCheckpointDialog); }
+}
+
+async function loadSchedules() {
+  let items = [];
+  try {
+    items = await api('/mesh/schedules');
+  } catch (e) {
+    $('#sched-list').innerHTML = `<p style="color:var(--danger)">error: ${esc(e.message)}</p>`;
+    return;
+  }
+  $('#sched-count').textContent = `${items.length} schedules`;
+  if (!items.length) {
+    $('#sched-list').innerHTML = `<p class="meta">No schedules yet. Click <b>+ New</b> to
+      create one — supply a name, cron or interval, and paste your job YAML.
+      Or use the CLI: <code>./mesh-schedule.sh create &lt;name&gt; &lt;job.yaml&gt;
+      --cron '0 0 * * * *'</code>.</p>`;
+    return;
+  }
+  const rows = items.map(s => scheduleRow(s)).join('');
+  $('#sched-list').innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%; font-size:0.78rem; border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--muted-border-color,#e0e0e0);">
+            <th style="text-align:left; padding:0.3rem;">Name</th>
+            <th style="text-align:left; padding:0.3rem;">Trigger</th>
+            <th style="text-align:left; padding:0.3rem;">Checkpoint</th>
+            <th style="text-align:left; padding:0.3rem;">Last run</th>
+            <th style="text-align:right; padding:0.3rem;">Runs</th>
+            <th style="text-align:left; padding:0.3rem;">State</th>
+            <th style="text-align:right; padding:0.3rem;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  items.forEach(s => wireScheduleRow(s));
+}
+
+function scheduleRow(s) {
+  const trigger = s.cron ? `cron: <code>${esc(s.cron)}</code>`
+                : (s.intervalSeconds ? `every ${s.intervalSeconds}s` : '—');
+  const cp = s.checkpoint
+      ? `<code title="Last good key — substituted as \${CHECKPOINT}">${esc(short(s.checkpoint, 40))}</code>`
+      : '<small class="meta">(unset)</small>';
+  const lastAt = s.lastSuccessAt || s.lastFailureAt || s.lastRunAt;
+  const lastCell = lastAt
+      ? `<span title="${esc(lastAt)}">${esc(shortRelative(lastAt))}</span>${
+          s.lastError ? ` <span title="${esc(s.lastError)}" style="color:var(--danger)">⚠︎</span>` : ''
+        }`
+      : '<small class="meta">—</small>';
+  const runs = `${s.successfulRuns||0}/${s.totalRuns||0}`;
+  const stateBadge = s.enabled
+      ? `<span style="color:#3af8;">● enabled</span>`
+      : `<span class="meta">◌ paused</span>`;
+  const name = esc(s.name);
+  const lifecycle = inferLifecycleFromYaml(s.jobYaml);
+  return `
+    <tr data-name="${name}" style="border-bottom:1px solid var(--muted-border-color,#eee);">
+      <td style="padding:0.3rem;"><b>${name}</b>${lifecycleBadge(lifecycle)}</td>
+      <td style="padding:0.3rem;">${trigger}</td>
+      <td style="padding:0.3rem;">${cp} <a href="#" data-act="editcp" style="font-size:0.7rem;">edit</a></td>
+      <td style="padding:0.3rem;">${lastCell}</td>
+      <td style="padding:0.3rem; text-align:right;">${runs}</td>
+      <td style="padding:0.3rem;">${stateBadge}</td>
+      <td style="padding:0.3rem; text-align:right; white-space:nowrap;">
+        <button data-act="run"    style="margin:0 0.15rem; padding:0.1rem 0.5rem; font-size:0.72rem;">Run now</button>
+        <button data-act="toggle" style="margin:0 0.15rem; padding:0.1rem 0.5rem; font-size:0.72rem;" class="secondary outline">
+          ${s.enabled ? 'Pause' : 'Resume'}
+        </button>
+        <button data-act="edit"   style="margin:0 0.15rem; padding:0.1rem 0.5rem; font-size:0.72rem;" class="secondary outline">Edit</button>
+        <button data-act="delete" style="margin:0 0.15rem; padding:0.1rem 0.5rem; font-size:0.72rem;" class="secondary outline"
+                title="Delete schedule (checkpoint file is also removed)">✕</button>
+      </td>
+    </tr>`;
+}
+
+function shortRelative(iso) {
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return iso;
+  const dt = Date.now() - t;
+  const sec = Math.round(dt / 1000);
+  if (sec < 60)    return `${sec}s ago`;
+  if (sec < 3600)  return `${Math.round(sec/60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec/3600)}h ago`;
+  return `${Math.round(sec/86400)}d ago`;
+}
+
+function wireScheduleRow(s) {
+  const row = $(`tr[data-name="${CSS.escape(s.name)}"]`);
+  if (!row) return;
+  row.querySelector('[data-act="run"]')   ?.addEventListener('click', () => runScheduleNow(s.name));
+  row.querySelector('[data-act="toggle"]')?.addEventListener('click', () => toggleSchedule(s.name, !s.enabled));
+  row.querySelector('[data-act="edit"]')  ?.addEventListener('click', () => openScheduleDialog(s));
+  row.querySelector('[data-act="delete"]')?.addEventListener('click', () => deleteSchedule(s.name));
+  row.querySelector('[data-act="editcp"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openCheckpointDialog(s);
+  });
+}
+
+async function runScheduleNow(name) {
+  try {
+    await api(`/mesh/schedules/${encodeURIComponent(name)}/run-now`, { method: 'POST' });
+    await loadSchedules();
+  } catch (e) { alert(`run-now failed: ${e.message}`); }
+}
+
+async function toggleSchedule(name, enable) {
+  const path = enable ? 'resume' : 'pause';
+  try {
+    await api(`/mesh/schedules/${encodeURIComponent(name)}/${path}`, { method: 'POST' });
+    await loadSchedules();
+  } catch (e) { alert(`${path} failed: ${e.message}`); }
+}
+
+async function deleteSchedule(name) {
+  if (!confirm(`Delete schedule "${name}"? Its checkpoint file will also be removed.`)) return;
+  try {
+    await api(`/mesh/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadSchedules();
+  } catch (e) { alert(`delete failed: ${e.message}`); }
+}
+
+function openScheduleDialog(s) {
+  schedEditing = s ? s.name : null;
+  $('#sched-dialog-title').textContent = s ? `Edit schedule: ${s.name}` : 'New schedule';
+  $('#sched-dialog-error').textContent = '';
+  $('#sched-name').value     = s?.name || '';
+  $('#sched-name').disabled  = !!s;   // name is the id — immutable
+  $('#sched-cron').value     = s?.cron || '';
+  $('#sched-interval').value = s?.intervalSeconds || '';
+  $('#sched-grace').value    = s?.catchupGraceSeconds ?? '';
+  $('#sched-maxc').value     = s?.maxConcurrent || 1;
+  $('#sched-enabled').checked = s ? !!s.enabled : true;
+  $('#sched-cp').value       = s?.checkpoint || '';
+  $('#sched-yaml').value     = s?.jobYaml || '';
+  $('#sched-dialog').showModal();
+}
+
+async function saveScheduleDialog() {
+  const name = $('#sched-name').value.trim();
+  const cron = $('#sched-cron').value.trim();
+  const iv   = $('#sched-interval').value.trim();
+  const yaml = $('#sched-yaml').value;
+  const errBox = $('#sched-dialog-error');
+  errBox.textContent = '';
+  if (!name)           return errBox.textContent = 'name is required';
+  if (!yaml.trim())    return errBox.textContent = 'job YAML is required';
+  if (!cron && !iv)    return errBox.textContent = 'set either cron OR interval';
+  if (cron && iv)      return errBox.textContent = 'set cron OR interval, not both';
+  const body = {
+    name, jobYaml: yaml,
+    enabled: $('#sched-enabled').checked,
+    maxConcurrent: parseInt($('#sched-maxc').value, 10) || 1,
+  };
+  if (cron) body.cron = cron;
+  if (iv)   body.intervalSeconds = parseInt(iv, 10);
+  const grace = $('#sched-grace').value.trim();
+  if (grace) body.catchupGraceSeconds = parseInt(grace, 10);
+  const cp = $('#sched-cp').value;
+  if (cp !== '') body.checkpoint = cp;
+  try {
+    await api('/mesh/schedules', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    $('#sched-dialog').close();
+    schedEditing = null;
+    await loadSchedules();
+  } catch (e) {
+    errBox.textContent = `save failed: ${e.message}`;
+  }
+}
+
+function openCheckpointDialog(s) {
+  $('#sched-cp-target').textContent = `— ${s.name}`;
+  $('#sched-cp-value').value = s.checkpoint || '';
+  $('#sched-cp-dialog').dataset.name = s.name;
+  $('#sched-cp-dialog').showModal();
+}
+
+async function saveCheckpointDialog() {
+  const name = $('#sched-cp-dialog').dataset.name;
+  const value = $('#sched-cp-value').value;
+  try {
+    await api(`/mesh/schedules/${encodeURIComponent(name)}/checkpoint`, {
+      method: 'PUT',
+      headers: { 'content-type': 'text/plain' },
+      body: value,
+    });
+    $('#sched-cp-dialog').close();
+    await loadSchedules();
+  } catch (e) { alert(`checkpoint save failed: ${e.message}`); }
 }
 

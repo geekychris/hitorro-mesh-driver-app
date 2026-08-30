@@ -42,6 +42,8 @@
             title="DAG pipelines — YAML jobs of source → steps → sinks. Also has a form-based builder.">Pipelines</button>
     <button role="tab" data-target="jobs"
             title="Persistent job history — every past run with stats, timings, sink counts. Survives driver restarts.">Jobs</button>
+    <button role="tab" data-target="schedules"
+            title="Durable pipeline schedules — cron / interval + persistent checkpoint. Survives driver restarts and catches up after downtime.">Schedules</button>
     <button role="tab" data-target="search"
             title="Full-text search over pipeline-indexed Lucene indexes.">Search</button>
     <button role="tab" data-target="fleet"
@@ -1416,6 +1418,105 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
       <div id="jobs-list">loading…</div>
     </article>
   </section>
+
+  <!-- ================== SCHEDULES ================== -->
+  <section id="schedules" class="tab-panel">
+    <article>
+      <header style="display:flex; align-items:center; gap:0.4rem;">
+        <span>Pipeline schedules</span>
+        <small class="meta" id="sched-count">—</small>
+        <span style="flex:1"></span>
+        <button id="sched-new" type="button"
+                style="margin:0; padding:0.15rem 0.7rem; font-size:0.78rem;">+ New</button>
+        <button id="sched-refresh" type="button" class="secondary outline"
+                style="margin:0; padding:0.1rem 0.5rem; font-size:0.75rem;">↻</button>
+      </header>
+      <p><small class="meta">Each schedule runs a mesh pipeline on a cron or fixed interval,
+        tracks a per-schedule <b>checkpoint</b> (the "last good key" — an opaque string like
+        an ISO instant or SQL row id substituted into the job YAML as <code>${CHECKPOINT}</code>),
+        and catches up automatically if the driver was offline. Definitions in
+        <code>&lt;HT_DATA&gt;/schedules/schedules.json</code>; checkpoints in
+        <code>&lt;HT_DATA&gt;/schedules/checkpoints/&lt;name&gt;.txt</code>. Docs:
+        see <code>hitorro-mesh-pipelines/docs/scheduling.md</code>.</small></p>
+      <div id="sched-list">loading…</div>
+    </article>
+  </section>
+
+  <!-- ================== SCHEDULE EDITOR MODAL ================== -->
+  <dialog id="sched-dialog" style="width:min(900px,95vw); max-height:90vh;">
+    <article style="margin:0;">
+      <header style="display:flex; align-items:center; gap:0.4rem;">
+        <b id="sched-dialog-title">New schedule</b>
+        <span style="flex:1"></span>
+        <button id="sched-dialog-close" type="button" class="secondary outline"
+                style="margin:0; padding:0.15rem 0.8rem;">Cancel</button>
+      </header>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem;">
+        <label>Name <small class="meta">(unique, becomes REST path)</small>
+          <input id="sched-name" type="text" placeholder="mac-mail-hourly"
+                 style="font-family:monospace;"/>
+        </label>
+        <label>Max concurrent <small class="meta">(overlap cap)</small>
+          <input id="sched-maxc" type="number" value="1" min="1" max="8"/>
+        </label>
+        <label>Cron <small class="meta">(Spring 6-field: sec min hr dom mon dow)</small>
+          <input id="sched-cron" type="text" placeholder="0 0 * * * *"
+                 style="font-family:monospace;"/>
+        </label>
+        <label>Or interval (seconds) <small class="meta">(mutually exclusive with cron)</small>
+          <input id="sched-interval" type="number" min="1" placeholder="3600"/>
+        </label>
+        <label>Catch-up grace (seconds) <small class="meta">(max age before a bootstrap replay)</small>
+          <input id="sched-grace" type="number" min="0" placeholder="60"/>
+        </label>
+        <label style="display:flex; align-items:center; gap:0.4rem; padding-top:1.3rem;">
+          <input id="sched-enabled" type="checkbox" checked/>
+          Enabled
+        </label>
+      </div>
+      <label style="margin-top:0.4rem; display:block;">Initial checkpoint
+        <small class="meta">(optional — overrides "last good key" for the first run;
+        blank means the job's own default WHERE-clause fallback kicks in)</small>
+        <input id="sched-cp" type="text" placeholder="2026-08-01T00:00:00Z"
+               style="font-family:monospace;"/>
+      </label>
+      <label style="margin-top:0.4rem; display:block;">Job YAML
+        <small class="meta">(substituted at run time: <code>${CHECKPOINT}</code>,
+        <code>${CHECKPOINT_UNIX_SECONDS}</code>, <code>${NOW}</code>,
+        <code>${SCHEDULE_NAME}</code>, …)</small>
+        <textarea id="sched-yaml" rows="14"
+                  style="font-family:monospace; font-size:0.72rem; width:100%;"
+                  placeholder="job: my-hourly-ingest&#10;nodes:&#10;  - id: extract&#10;    pipeline:&#10;      source:&#10;        kind: sqlite&#10;        path: ...&#10;        query: |&#10;          SELECT * FROM messages&#10;          WHERE received > COALESCE(NULLIF('${CHECKPOINT_UNIX_SECONDS}',''), 0)"></textarea>
+      </label>
+      <footer style="display:flex; align-items:center; gap:0.5rem; padding-top:0.3rem;">
+        <small class="meta" id="sched-dialog-error" style="color:var(--danger);"></small>
+        <span style="flex:1"></span>
+        <button id="sched-dialog-save" type="button"
+                style="margin:0; padding:0.2rem 1rem;">Save</button>
+      </footer>
+    </article>
+  </dialog>
+
+  <!-- ================== CHECKPOINT EDIT MODAL ================== -->
+  <dialog id="sched-cp-dialog" style="width:min(560px,95vw);">
+    <article style="margin:0;">
+      <header><b>Edit checkpoint</b> <small class="meta" id="sched-cp-target"></small></header>
+      <p><small class="meta">The scheduler substitutes this into the job YAML at run time.
+        Advance it forward to skip work, or roll it back to force a re-read.
+        On a successful run the scheduler overwrites this with the run's start time
+        (ISO instant) unless the job wrote its own value mid-run.</small></p>
+      <label>Value
+        <input id="sched-cp-value" type="text" style="font-family:monospace;"/>
+      </label>
+      <footer style="display:flex; align-items:center; gap:0.5rem;">
+        <span style="flex:1"></span>
+        <button id="sched-cp-cancel" type="button" class="secondary outline"
+                style="margin:0; padding:0.2rem 0.9rem;">Cancel</button>
+        <button id="sched-cp-save"   type="button"
+                style="margin:0; padding:0.2rem 0.9rem;">Save checkpoint</button>
+      </footer>
+    </article>
+  </dialog>
 
   <!-- ================== LOG TAIL MODAL (mesh-viz + jobs) ================== -->
   <dialog id="mesh-log-dialog" style="width:min(1100px,95vw); max-height:85vh;">
