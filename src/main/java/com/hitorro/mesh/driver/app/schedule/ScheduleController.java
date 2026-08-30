@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.hitorro.mesh.pipelines.runtime.JobStatus;
 import com.hitorro.mesh.pipelines.schedule.Schedule;
 import com.hitorro.mesh.pipelines.schedule.ScheduleTemplate;
-import com.hitorro.mesh.pipelines.schedule.ScheduleTemplateRegistry;
+import com.hitorro.util.persist.ClasspathManifestRegistry;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -43,14 +43,14 @@ import java.util.Map;
 public class ScheduleController {
 
     private final ScheduleService svc;
-    private final ScheduleTemplateRegistry templates;
+    private final ClasspathManifestRegistry<ScheduleTemplate> templates;
 
     public ScheduleController(ScheduleService svc) {
         this.svc = svc;
         // Templates are curated classpath resources; instantiate here so
         // the app's ApplicationContext doesn't need an explicit bean —
         // one fewer thing to configure for anyone embedding the driver.
-        this.templates = new ScheduleTemplateRegistry();
+        this.templates = ScheduleTemplate.loadBundled();
     }
 
     @GetMapping
