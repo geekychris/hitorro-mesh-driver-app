@@ -81,7 +81,7 @@ public class ScheduleController {
     }
 
     @GetMapping("/{name}")
-    public ResponseEntity<Map<String, Object>> show(@PathVariable String name) {
+    public ResponseEntity<Map<String, Object>> show(@PathVariable("name") String name) {
         try {
             Schedule s = svc.get(name);
             JobStatus last = svc.lastStatus(name);
@@ -98,14 +98,14 @@ public class ScheduleController {
     }
 
     @DeleteMapping("/{name}")
-    public ResponseEntity<Void> delete(@PathVariable String name) throws IOException {
+    public ResponseEntity<Void> delete(@PathVariable("name") String name) throws IOException {
         return svc.delete(name)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }
 
     @PostMapping("/{name}/run-now")
-    public ResponseEntity<Map<String, Object>> runNow(@PathVariable String name) {
+    public ResponseEntity<Map<String, Object>> runNow(@PathVariable("name") String name) {
         try {
             JobStatus st = svc.runNow(name);
             if (st == null) return ResponseEntity.status(429).body(Map.of(
@@ -120,19 +120,19 @@ public class ScheduleController {
     }
 
     @PostMapping("/{name}/pause")
-    public ResponseEntity<Schedule> pause(@PathVariable String name) throws IOException {
+    public ResponseEntity<Schedule> pause(@PathVariable("name") String name) throws IOException {
         try { return ResponseEntity.ok(svc.setEnabled(name, false)); }
         catch (IllegalArgumentException e) { return ResponseEntity.notFound().build(); }
     }
 
     @PostMapping("/{name}/resume")
-    public ResponseEntity<Schedule> resume(@PathVariable String name) throws IOException {
+    public ResponseEntity<Schedule> resume(@PathVariable("name") String name) throws IOException {
         try { return ResponseEntity.ok(svc.setEnabled(name, true)); }
         catch (IllegalArgumentException e) { return ResponseEntity.notFound().build(); }
     }
 
     @GetMapping("/{name}/checkpoint")
-    public ResponseEntity<Map<String, String>> getCheckpoint(@PathVariable String name) {
+    public ResponseEntity<Map<String, String>> getCheckpoint(@PathVariable("name") String name) {
         try {
             svc.get(name); // 404 check
             return ResponseEntity.ok(Map.of("checkpoint", svc.getCheckpoint(name)));
@@ -143,9 +143,9 @@ public class ScheduleController {
      *  or a JSON body {@code {"checkpoint":"..."}}. */
     @PutMapping(value = "/{name}/checkpoint",
                 consumes = { MediaType.TEXT_PLAIN_VALUE, MediaType.APPLICATION_JSON_VALUE })
-    public ResponseEntity<Map<String, String>> setCheckpoint(@PathVariable String name,
+    public ResponseEntity<Map<String, String>> setCheckpoint(@PathVariable("name") String name,
                                                               @RequestBody(required = false) String rawBody,
-                                                              @RequestParam(required = false) String value)
+                                                              @RequestParam(name = "value", required = false) String value)
             throws IOException {
         try { svc.get(name); }
         catch (IllegalArgumentException e) { return ResponseEntity.notFound().build(); }
