@@ -62,6 +62,7 @@ public class ScheduleService {
     private final ScheduleStore store;
     private final CheckpointStore checkpoints;
     private final JobRunner runner;
+    private final com.hitorro.mesh.pipelines.runtime.JobRegistry jobRegistry;
     private final TaskScheduler taskScheduler;
     private final Map<String, ScheduledFuture<?>> triggers = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger>       inflight = new ConcurrentHashMap<>();
@@ -70,9 +71,11 @@ public class ScheduleService {
     private final Path home;
 
     public ScheduleService(JobRunner runner,
+                           com.hitorro.mesh.pipelines.runtime.JobRegistry jobRegistry,
                            TaskScheduler taskScheduler,
                            @Value("${hitorro.mesh.schedule.home:#{null}}") String homeOverride) throws IOException {
         this.runner = runner;
+        this.jobRegistry = jobRegistry;
         this.taskScheduler = taskScheduler;
         this.home = resolveHome(homeOverride);
         Files.createDirectories(this.home);
@@ -249,6 +252,12 @@ public class ScheduleService {
         }
         JobStatus status = new JobStatus("schedule-" + s.name + "-" + now.toEpochMilli(), spec.id());
         lastStatus.put(s.name, status);
+        // Publish to the same JobRegistry the /mesh/jobs endpoint reads
+        // from — otherwise scheduler-invoked runs are invisible in the
+        // Jobs tab / history and the only failure signal is the row's
+        // lastError field. onTerminal in finally so the entry ends up
+        // in the persistent job history log too.
+        jobRegistry.register(status);
         log.info("scheduler [{}] run {} — checkpoint='{}'{}", s.name,
                 status.jobId, checkpoint, catchup ? " (catch-up)" : "");
         try {
@@ -257,6 +266,8 @@ public class ScheduleService {
         } catch (Throwable t) {
             log.warn("scheduler [{}] run failed: {}", s.name, t.getMessage());
             recordFailure(s, now, t.getMessage());
+        } finally {
+            jobRegistry.onTerminal(status);
         }
         return status;
     }
