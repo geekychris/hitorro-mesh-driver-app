@@ -1448,9 +1448,16 @@ SELECT alpha3 FROM iso_639_3 LIMIT 10"
       <header style="display:flex; align-items:center; gap:0.4rem;">
         <b id="sched-dialog-title">New schedule</b>
         <span style="flex:1"></span>
+        <label style="display:flex; align-items:center; gap:0.35rem; margin:0; font-size:0.78rem;">
+          <span class="meta">Load template:</span>
+          <select id="sched-template" style="margin:0; padding:0.15rem 0.35rem; font-size:0.78rem; min-width:14rem;">
+            <option value="">(blank — start from scratch)</option>
+          </select>
+        </label>
         <button id="sched-dialog-close" type="button" class="secondary outline"
                 style="margin:0; padding:0.15rem 0.8rem;">Cancel</button>
       </header>
+      <p id="sched-template-desc" class="meta" style="margin:0.15rem 0 0.4rem; font-size:0.72rem; min-height:0.9rem;"></p>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem;">
         <label>Name <small class="meta">(unique, becomes REST path)</small>
           <input id="sched-name" type="text" placeholder="mac-mail-hourly"

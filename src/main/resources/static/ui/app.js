@@ -6975,6 +6975,7 @@ function inferLifecycleFromYaml(yaml) {
 
 let schedTimer = null;
 let schedEditing = null;   // name being edited (null = create)
+let schedTemplates = null; // cached from /mesh/schedules/templates
 
 async function refreshSchedules() {
   wireSchedulesHandlers();
@@ -7003,6 +7004,53 @@ function wireSchedulesHandlers() {
   if (cpCancel && !cpCancel._wired) { cpCancel._wired = true; cpCancel.addEventListener('click', () => $('#sched-cp-dialog').close()); }
   const cpSave = $('#sched-cp-save');
   if (cpSave && !cpSave._wired)     { cpSave._wired = true; cpSave.addEventListener('click', saveCheckpointDialog); }
+  const tpl = $('#sched-template');
+  if (tpl && !tpl._wired) { tpl._wired = true; tpl.addEventListener('change', () => applyTemplate(tpl.value)); }
+  // Fire-and-forget prefetch — the picker is cheap and it's nicer to
+  // have options visible the first time the dialog opens.
+  if (!schedTemplates) loadScheduleTemplates();
+}
+
+async function loadScheduleTemplates() {
+  try {
+    schedTemplates = await api('/mesh/schedules/templates');
+  } catch (e) {
+    schedTemplates = [];
+    console.warn('template load failed:', e.message);
+  }
+  const sel = $('#sched-template');
+  if (!sel) return;
+  // Wipe existing entries except the "(blank)" one at index 0.
+  while (sel.options.length > 1) sel.remove(1);
+  for (const t of schedTemplates) {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = `${t.title}  (${t.lifecycle === 'CONTINUOUS' ? '● continuous' : '▪ batch'})`;
+    sel.appendChild(opt);
+  }
+}
+
+function applyTemplate(id) {
+  const desc = $('#sched-template-desc');
+  desc.textContent = '';
+  if (!id || !schedTemplates) return;
+  const t = schedTemplates.find(x => x.id === id);
+  if (!t) return;
+  desc.textContent = t.description || '';
+  // Only overwrite fields that are currently empty OR when this is a
+  // brand-new (not-editing) schedule. Editing an existing schedule and
+  // pulling a template shouldn't clobber the user's already-typed name.
+  const isNew = !schedEditing;
+  const d = t.defaults || {};
+  if (isNew && d.name) $('#sched-name').value = d.name;
+  if (d.cron !== undefined) $('#sched-cron').value = d.cron || '';
+  if (d.intervalSeconds !== undefined) $('#sched-interval').value = d.intervalSeconds || '';
+  if (d.catchupGraceSeconds !== undefined) $('#sched-grace').value = d.catchupGraceSeconds;
+  if (d.maxConcurrent !== undefined) $('#sched-maxc').value = d.maxConcurrent;
+  if (d.checkpoint !== undefined) $('#sched-cp').value = d.checkpoint;
+  if (d.enabled !== undefined) $('#sched-enabled').checked = !!d.enabled;
+  // YAML always replaced — the whole point of picking a template.
+  $('#sched-yaml').value = t.jobYaml || '';
 }
 
 async function loadSchedules() {
@@ -7131,6 +7179,11 @@ function openScheduleDialog(s) {
   schedEditing = s ? s.name : null;
   $('#sched-dialog-title').textContent = s ? `Edit schedule: ${s.name}` : 'New schedule';
   $('#sched-dialog-error').textContent = '';
+  // Reset template picker each time so it doesn't lie about the current form state.
+  const tplSel = $('#sched-template');
+  if (tplSel) tplSel.value = '';
+  const tplDesc = $('#sched-template-desc');
+  if (tplDesc) tplDesc.textContent = '';
   $('#sched-name').value     = s?.name || '';
   $('#sched-name').disabled  = !!s;   // name is the id — immutable
   $('#sched-cron').value     = s?.cron || '';

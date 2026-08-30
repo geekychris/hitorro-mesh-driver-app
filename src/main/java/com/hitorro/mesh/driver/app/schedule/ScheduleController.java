@@ -6,6 +6,8 @@ package com.hitorro.mesh.driver.app.schedule;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hitorro.mesh.pipelines.runtime.JobStatus;
 import com.hitorro.mesh.pipelines.schedule.Schedule;
+import com.hitorro.mesh.pipelines.schedule.ScheduleTemplate;
+import com.hitorro.mesh.pipelines.schedule.ScheduleTemplateRegistry;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -41,11 +43,30 @@ import java.util.Map;
 public class ScheduleController {
 
     private final ScheduleService svc;
+    private final ScheduleTemplateRegistry templates;
 
-    public ScheduleController(ScheduleService svc) { this.svc = svc; }
+    public ScheduleController(ScheduleService svc) {
+        this.svc = svc;
+        // Templates are curated classpath resources; instantiate here so
+        // the app's ApplicationContext doesn't need an explicit bean —
+        // one fewer thing to configure for anyone embedding the driver.
+        this.templates = new ScheduleTemplateRegistry();
+    }
 
     @GetMapping
     public List<Schedule> list() { return svc.list(); }
+
+    /** Starter templates for the UI's "New from template..." picker.
+     *  Bundled from {@code classpath:schedule-templates/manifest.json}. */
+    @GetMapping("/templates")
+    public List<ScheduleTemplate> templates() { return templates.all(); }
+
+    @GetMapping("/templates/{id}")
+    public ResponseEntity<ScheduleTemplate> template(@PathVariable("id") String id) {
+        return templates.get(id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
 
     @PostMapping
     public ResponseEntity<Schedule> upsert(@RequestBody Schedule body) throws IOException {
