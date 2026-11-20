@@ -12,7 +12,9 @@ const short = (s, n = 60) => s && s.length > n ? s.slice(0, n) + '…' : (s || '
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const ct = res.headers.get('content-type') || '';
-  const body = ct.includes('application/json') ? await res.json() : await res.text();
+  // Any JSON media type, e.g. application/vnd.spring-boot.actuator.v3+json
+  // from /actuator/health (else the health badge always said UNKNOWN).
+  const body = /[/+]json\b/.test(ct) ? await res.json() : await res.text();
   if (!res.ok) {
     const err = new Error(body?.message || res.statusText);
     err.status = res.status;
