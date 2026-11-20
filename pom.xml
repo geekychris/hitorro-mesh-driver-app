@@ -650,7 +650,8 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-streams-parquet</artifactId>
-            <version>3.0.2</version>
+            <!-- 3.0.3: without Hadoop's end-of-life Jetty 9.4 -->
+            <version>3.0.3</version>
             <optional>true</optional>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
