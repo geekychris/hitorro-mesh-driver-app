@@ -618,7 +618,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-datasets</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
         </dependency>
 
         <!-- DAG pipeline framework — self-contained (Jackson + optional Spring).
@@ -627,7 +627,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
         </dependency>
         <!-- Real sink adapters — dropped in via ServiceLoader. Adding
              these upgrades the built-in Phase-1 KV / Lucene stubs to
@@ -635,12 +635,12 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-kvstore</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
         </dependency>
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-lucene</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
         </dependency>
         <!-- jvs-lucene sink (type-aware Lucene projection via
              JVSLuceneIndexWriter) + jvs-groovy step. Same shape as the
@@ -676,7 +676,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-jvstype</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -700,7 +700,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-sqlite</artifactId>
-            <version>3.0.2</version>
+            <version>3.1.0</version>
         </dependency>
 
         <!-- Pull in the pipelines module's optional adapter deps so the
