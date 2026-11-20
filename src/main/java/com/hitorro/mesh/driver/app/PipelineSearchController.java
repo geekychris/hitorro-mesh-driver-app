@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.hitorro.mesh.pipelines.adapters.lucene.LuceneSearchService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;

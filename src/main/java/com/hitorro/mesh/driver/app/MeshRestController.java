@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.hitorro.mesh.AgentDescriptor;
 import com.hitorro.mesh.UnregisterTableMessage;
 import com.hitorro.mesh.driver.app.query.RuntimeTableTracker;
@@ -618,7 +618,7 @@ public class MeshRestController {
             throw new IllegalArgumentException("at least one partition is required");
         }
         com.hitorro.jsontypesystem.Type type = new com.hitorro.jsontypesystem.Type();
-        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        type.init(com.hitorro.util.json.JsonMappers.json().readTree(req.typeJson));
         List<DistributedTable.Partition> parts = new java.util.ArrayList<>();
         for (RegisterPartitionRequest p : req.partitions) {
             if (p.key == null || p.key.isBlank()) {
@@ -794,8 +794,8 @@ public class MeshRestController {
             throw new IllegalArgumentException("no dataset registered under id: " + id);
         }
 
-        com.fasterxml.jackson.databind.ObjectMapper json =
-                new com.fasterxml.jackson.databind.ObjectMapper();
+        tools.jackson.databind.ObjectMapper json =
+                com.hitorro.util.json.JsonMappers.json();
         @SuppressWarnings("unchecked")
         Map<String, Object> out = json.convertValue(m, Map.class);
 
@@ -810,7 +810,7 @@ public class MeshRestController {
             try {
                 Map<?, ?> installed = json.readValue(installedJson.toFile(), Map.class);
                 out.put("installed", installed);
-            } catch (java.io.IOException e) {
+            } catch (tools.jackson.core.JacksonException e) {   // Jackson 3: I/O errors are JacksonIOException
                 log.warn("dataset {}: could not read {} ({}) — returning manifest only",
                         m.id(), installedJson, e.getMessage());
             }

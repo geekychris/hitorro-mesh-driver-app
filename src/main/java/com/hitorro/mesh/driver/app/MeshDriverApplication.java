@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.hitorro.jsontypesystem.Type;
 import com.hitorro.mesh.InMemoryMeshTransport;
 import com.hitorro.mesh.MeshTransport;
@@ -41,7 +41,7 @@ import java.util.Set;
 public class MeshDriverApplication implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(MeshDriverApplication.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = com.hitorro.util.json.JsonMappers.json();
 
     private MeshTransport transport;
     private MeshDriver driver;

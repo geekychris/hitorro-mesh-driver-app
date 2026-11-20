@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app.query;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BatchWriteRequestShapeTest {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = com.hitorro.util.json.JsonMappers.json();
 
     @Test
     void batchRequest_deserialisesFromCleanJson() throws Exception {

@@ -24,22 +24,22 @@
 
     <dependencyManagement>
         <dependencies>
-            <!-- hitorro-core/basefile/util 3.1.0: S3 on the AWS SDK v2, and no
-                 Hadoop from them (Hadoop stays only for Parquet). -->
+            <!-- HiTorro 4.0.0 (Jackson 3). hitorro-core/basefile/util: S3 on the AWS SDK v2,
+                 and no Hadoop from them (Hadoop stays only for Parquet). -->
             <dependency>
                 <groupId>com.hitorro</groupId>
                 <artifactId>hitorro-core</artifactId>
-                <version>3.1.0</version>
+                <version>4.0.0</version>
             </dependency>
             <dependency>
                 <groupId>com.hitorro</groupId>
                 <artifactId>hitorro-basefile</artifactId>
-                <version>3.1.0</version>
+                <version>4.0.0</version>
             </dependency>
             <dependency>
                 <groupId>com.hitorro</groupId>
                 <artifactId>hitorro-util</artifactId>
-                <version>3.1.0</version>
+                <version>4.0.0</version>
             </dependency>
             <!-- security pins (cloud-stack vulnerability registry) -->
             <dependency>
@@ -97,6 +97,15 @@
                 <artifactId>jline-terminal-jni</artifactId>
                 <version>3.30.17</version>
             </dependency>
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>3.1.8</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Jackson 2 still arrives through third-party libraries (calcite-core, parquet,
+                 ...): keep it pinned for security. HiTorro and the app use only Jackson 3. -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
@@ -477,7 +486,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-core</artifactId>
-            <version>3.0.2</version>
+            <version>4.0.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -512,7 +521,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-driver</artifactId>
-            <version>3.0.2</version>
+            <version>4.0.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -563,7 +572,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-orion</artifactId>
-            <version>3.0.2</version>
+            <version>4.0.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -589,7 +598,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-nats</artifactId>
-            <version>3.0.2</version>
+            <version>4.0.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -618,7 +627,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-datasets</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
         </dependency>
 
         <!-- DAG pipeline framework — self-contained (Jackson + optional Spring).
@@ -627,7 +636,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
         </dependency>
         <!-- Real sink adapters — dropped in via ServiceLoader. Adding
              these upgrades the built-in Phase-1 KV / Lucene stubs to
@@ -635,12 +644,12 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-kvstore</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
         </dependency>
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-lucene</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
         </dependency>
         <!-- jvs-lucene sink (type-aware Lucene projection via
              JVSLuceneIndexWriter) + jvs-groovy step. Same shape as the
@@ -654,7 +663,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-retrieval</artifactId>
-            <version>3.0.2</version>
+            <version>4.0.0</version>
         </dependency>
 
         <!-- Parquet output for /mesh/queries/write. Optional — the write
@@ -664,8 +673,8 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-streams-parquet</artifactId>
-            <!-- 3.0.3: without Hadoop's end-of-life Jetty 9.4 -->
-            <version>3.0.3</version>
+            <!-- 4.0.0 (Jackson 3); since 3.0.3 without Hadoop's end-of-life Jetty 9.4 -->
+            <version>4.0.0</version>
             <optional>true</optional>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
@@ -676,7 +685,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-jvstype</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
             <exclusions>
                 <exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-reload4j</artifactId></exclusion>
                 <exclusion><groupId>ch.qos.reload4j</groupId><artifactId>reload4j</artifactId></exclusion>
@@ -700,7 +709,7 @@
         <dependency>
             <groupId>com.hitorro</groupId>
             <artifactId>hitorro-mesh-pipelines-sqlite</artifactId>
-            <version>3.1.0</version>
+            <version>4.0.0</version>
         </dependency>
 
         <!-- Pull in the pipelines module's optional adapter deps so the
@@ -720,13 +729,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
-        </dependency>
-        <!-- Keep Jackson 2 (com.fasterxml.jackson) for HTTP JSON: the HiTorro
-             libraries hand JsonNode values from Jackson 2 to the controllers.
-             Selected with spring.http.converters.preferred-json-mapper=jackson2. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-jackson2</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -784,12 +786,29 @@
                          Hadoop) is optional for consumers of this artifact but
                          needed by the app: StorageService refers to Parquet's
                          InputFile, so without it the driver failed to start
-                         (NoClassDefFoundError: org/apache/parquet/io/InputFile). -->
+                         (NoClassDefFoundError: org/apache/parquet/io/InputFile).
+                         (PackagedAppIT starts the packaged jar.) -->
                     <includeOptional>true</includeOptional>
                 </configuration>
                 <executions>
                     <execution>
                         <goals><goal>repackage</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Integration tests (*IT) run after `package` against the repackaged jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <app.jar>${project.build.directory}/${project.build.finalName}.jar</app.jar>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals><goal>integration-test</goal><goal>verify</goal></goals>
                     </execution>
                 </executions>
             </plugin>

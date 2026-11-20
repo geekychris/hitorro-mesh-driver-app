@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app.fleet;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.hitorro.index.search.SearchResult;
 import com.hitorro.jsontypesystem.JVS;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.hitorro.util.json.JsonValues;
 
 /**
  * REST surface for cross-fleet federated retrieval. Exposed only when a
@@ -72,17 +73,17 @@ public class FederatedRetrievalController {
         try {
             String indexName = requireString(body, "indexName");
             String query     = requireString(body, "query");
-            int offset       = body.path("offset").asInt(0);
-            int limit        = body.path("limit").asInt(20);
-            String lang      = body.path("lang").asText(null);
+            int offset       = JsonValues.asInt(body.path("offset"), 0);
+            int limit        = JsonValues.asInt(body.path("limit"), 20);
+            String lang      = JsonValues.asText(body.path("lang"), null);
             List<String> facets = null;
             if (body.has("facets") && body.get("facets").isArray()) {
                 var arr = body.get("facets");
                 facets = new java.util.ArrayList<>(arr.size());
-                for (JsonNode f : arr) facets.add(f.asText());
+                for (JsonNode f : arr) facets.add(JsonValues.asText(f));
             }
             String merger = body.has("merger") && !body.get("merger").isNull()
-                    ? body.get("merger").asText() : null;
+                    ? JsonValues.asText(body.get("merger")) : null;
 
             SearchResult sr = federated.searchFederated(indexName, query, offset, limit,
                     facets, lang, merger);
@@ -114,9 +115,9 @@ public class FederatedRetrievalController {
     }
 
     private static String requireString(JsonNode body, String field) {
-        if (!body.hasNonNull(field) || body.get(field).asText().isBlank()) {
+        if (!body.hasNonNull(field) || JsonValues.asText(body.get(field)).isBlank()) {
             throw new IllegalArgumentException(field + " is required");
         }
-        return body.get(field).asText();
+        return JsonValues.asText(body.get(field));
     }
 }
