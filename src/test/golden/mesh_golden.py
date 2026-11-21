@@ -125,6 +125,17 @@ def requests_list(work):
       ('GET', '/', None), ('GET', '/ui/', None), ('GET', '/no/such/path', None),
     ]
 
+# GOLDEN_DEPLOYED=1: start the apps as the hitorro-mesh Helm chart and cloud-stack's deploy/mesh overlay
+# do: --spring.config.location (which replaces the packaged application.yml) plus the overlay's env.
+DEPLOYED = os.environ.get('GOLDEN_DEPLOYED') == '1'
+DEPLOYED_ENV = {'SPRING_HTTP_CONVERTERS_PREFERREDJSONMAPPER': 'jackson2',
+                'MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE': 'health,info,metrics,prometheus'}
+def deployed_args(work, name):
+    if not DEPLOYED: return []
+    f = os.path.join(work, name + '-deployed.yml')
+    with open(f, 'w') as fh: fh.write('spring:\n  main:\n    banner-mode: off\n')
+    return ['--spring.config.location=file:' + f]
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--driver-cp'); ap.add_argument('--agent-cp'); ap.add_argument('--out'); ap.add_argument('--jar', action='store_true')
@@ -140,7 +151,9 @@ def main():
     subprocess.run(['docker', 'run', '-d', '--rm', '--name', nats, '-p', f'{np}:4222', 'nats:2.10', '-js'], check=True, env=env, stdout=subprocess.DEVNULL)
     def java(cp, main_cls, args, log):
         cmd = ['java', '-Xmx768m', '-Duser.home=' + os.path.join(work, 'home'), '-Dhitorro.agent.home=' + os.path.join(work, 'agent-home')] + (['-jar', cp] if (cp.endswith('.jar') and os.pathsep not in cp) else ['-cp', cp, main_cls]) + args
-        p = subprocess.Popen(cmd, stdout=open(log, 'w'), stderr=subprocess.STDOUT, cwd=work)
+        cmd += deployed_args(work, os.path.basename(log)[:-4])
+        p = subprocess.Popen(cmd, stdout=open(log, 'w'), stderr=subprocess.STDOUT, cwd=work,
+                             env=dict(os.environ, **(DEPLOYED_ENV if DEPLOYED else {})))
         procs.append(p); return p
     try:
         tdir = os.path.join(work, 'types'); os.makedirs(tdir)
