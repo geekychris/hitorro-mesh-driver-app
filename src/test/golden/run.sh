@@ -12,9 +12,17 @@
 # main runs must match byte for byte after masking run-dependent values (run-day timestamps keep
 # their format, epoch ms near now, query ids, durations, pids, ports, the work dir); a record whose
 # key/element order varies across main runs (Map.of, hash sets) is compared order-insensitively.
+# GOLDEN_DEPLOYED=1 starts the apps as the hitorro-mesh Helm chart and cloud-stack's deploy/mesh overlay do
+# (--spring.config.location replacing application.yml, plus the overlay's env) and compares with main
+# recorded the same way (main-deployed/); on 4.0.0 before the fix this crashed or wrote Jackson 3's format.
 # Requires python3, docker (DOCKER_HOST), java 21. Exit code 0 = identical.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 python3 "$here/mesh_golden.py" --driver-cp "$1" --agent-cp "$2" --out "$work/new.jsonl" --work "$work/w"
-python3 "$here/golden_compare.py" "$(ls "$here"/main/main-*.jsonl.gz | paste -sd, -)" "$work/new.jsonl"
+if [ "${GOLDEN_DEPLOYED:-}" = 1 ]; then
+  python3 "$here/golden_compare.py" "$(ls "$here"/main-deployed/main-*.jsonl.gz | paste -sd, -)" "$work/new.jsonl" \
+    --order-from="$(ls "$here"/main/main-*.jsonl.gz | paste -sd, -)"
+else
+  python3 "$here/golden_compare.py" "$(ls "$here"/main/main-*.jsonl.gz | paste -sd, -)" "$work/new.jsonl"
+fi

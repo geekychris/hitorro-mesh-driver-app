@@ -129,10 +129,14 @@ if __name__ == '__main__':
     mains = sys.argv[1].split(','); cand = sys.argv[2]
     # --accepted=FILE: records (same i and req) where a deliberate difference from main is expected;
     # those are compared with FILE (recorded from the migrated build) instead of main.
-    accepted = {}
+    # --order-from=MAIN1[,MAIN2,...]: more main recordings (another configuration of the same requests)
+    # used only to learn which records' key/element order varies between runs (Map.of, hash sets).
+    accepted = {}; order_from = []
     for arg in sys.argv[3:]:
         if arg.startswith('--accepted='):
             for r in load(arg.split('=', 1)[1]): accepted[(r['i'], r['req'])] = r
+        if arg.startswith('--order-from='):
+            order_from = [load(m) for m in arg.split('=', 1)[1].split(',')]
     days = {time.strftime('%Y-%m-%d', time.gmtime(time.time() + d * 86400)) for d in (-2, -1, 0, 1)}
     M = [load(m) for m in mains]; C = load(cand)
     diffs = 0; loose_n = 0; unstable = 0; n_accepted = 0
@@ -152,8 +156,12 @@ if __name__ == '__main__':
                 for lab, x, y in zip(('req', 'body', 'status', 'ctype', 'resp', 'upstream'), na, nc):
                     if x != y: print('  %s:\n    accepted: %s\n    new:      %s' % (lab, str(x)[:700], str(y)[:700]))
             continue
-        if all(n == ns[0] for n in ns):
+        os_ = [normalise(x[k], days) for x in order_from if len(x) > k and x[k]['req'] == rc['req']]
+        varies = any(n != os_[0] for n in os_) and all(loose(n) == loose(os_[0]) for n in os_)
+        if all(n == ns[0] for n in ns) and not varies:
             ok = nc == ns[0]; mode = 'exact'
+        elif varies and all(loose(n) == loose(ns[0]) for n in ns):
+            ok = loose(nc) == loose(ns[0]); mode = 'order-insensitive'; loose_n += 1
         elif all(loose(n) == loose(ns[0]) for n in ns):
             ok = loose(nc) == loose(ns[0]); mode = 'order-insensitive'; loose_n += 1
         else:
