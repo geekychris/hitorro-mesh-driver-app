@@ -739,6 +739,16 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
+        <!-- hitorro-core's logger (com.hitorro.util.log.Logger) calls the log4j 1
+             API (Logger, Level, Priority), and every reload4j is excluded here, so
+             the first use (e.g. HTS3FileSystem when a table is read from s3://)
+             failed with NoClassDefFoundError: org/apache/log4j/Priority. This
+             bridge provides that API on top of SLF4J. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>log4j-over-slf4j</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -769,6 +779,13 @@
                 <version>${spring-boot.version}</version>
                 <configuration>
                     <mainClass>com.hitorro.mesh.driver.app.MeshDriverApplication</mainClass>
+                    <!-- Spring Boot 4 leaves <optional> dependencies out of the
+                         fat jar by default. hitorro-streams-parquet (Parquet,
+                         Hadoop) is optional for consumers of this artifact but
+                         needed by the app: StorageService refers to Parquet's
+                         InputFile, so without it the driver failed to start
+                         (NoClassDefFoundError: org/apache/parquet/io/InputFile). -->
+                    <includeOptional>true</includeOptional>
                 </configuration>
                 <executions>
                     <execution>
