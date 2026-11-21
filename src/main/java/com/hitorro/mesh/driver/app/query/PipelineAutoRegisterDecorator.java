@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app.query;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.hitorro.mesh.pipelines.model.SinkSpec;
 import com.hitorro.mesh.pipelines.sinks.SinkRegistry;
 import com.hitorro.util.core.iterator.sinks.Sink;

@@ -3,8 +3,8 @@
  */
 package com.hitorro.mesh.driver.app.query;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.hitorro.jsontypesystem.Type;
 import com.hitorro.mesh.RegisterTableMessage;
 import com.hitorro.mesh.driver.DistributedTable;
@@ -213,7 +213,7 @@ public class QueryWriteController {
         // agent based on the partition:<name>:<key> capability the agent
         // will advertise once install completes.
         Type type = new Type();
-        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        type.init(com.hitorro.util.json.JsonMappers.json().readTree(req.typeJson));
         List<DistributedTable.Partition> parts = new java.util.ArrayList<>();
         for (PartitionEntry p : req.partitions) {
             parts.add(new DistributedTable.Partition(p.key,
@@ -283,7 +283,7 @@ public class QueryWriteController {
         }
 
         Type type = new Type();
-        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        type.init(com.hitorro.util.json.JsonMappers.json().readTree(req.typeJson));
         driver.tables().registerBroadcast(req.name);
         DistributedTable.Partition part = new DistributedTable.Partition(
                 "broadcast", java.util.Set.of("jvssql"), -1L);
@@ -347,7 +347,7 @@ public class QueryWriteController {
         // Distributed → single register with the caller-supplied partition-key,
         // capability is [jvssql] (any agent that has the runtime install can serve).
         Type type = new Type();
-        type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(typeJson));
+        type.init(com.hitorro.util.json.JsonMappers.json().readTree(typeJson));
         String pk = req.broadcast ? "broadcast" : req.partitionKey;
         if (!req.broadcast && (pk == null || pk.isBlank())) {
             throw new IllegalArgumentException("partitionKey is required when broadcast=false");
@@ -389,7 +389,7 @@ public class QueryWriteController {
             return List.of();
         }
         List<JsonNode> out = new java.util.ArrayList<>();
-        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        tools.jackson.databind.ObjectMapper json = com.hitorro.util.json.JsonMappers.json();
         try (java.io.InputStream is = bf.getInputStream();
              java.io.BufferedReader r = new java.io.BufferedReader(
                      new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))) {
@@ -669,7 +669,7 @@ public class QueryWriteController {
         }
         // Parse to validate before we mutate any state.
         Type parsedType = new Type();
-        parsedType.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(req.typeJson));
+        parsedType.init(com.hitorro.util.json.JsonMappers.json().readTree(req.typeJson));
 
         // Verify the source file is still readable — a schema-update
         // announces a re-load to every agent, so we want to refuse if
@@ -969,7 +969,7 @@ public class QueryWriteController {
         driver.tables().registerBroadcast(name);
         try {
             Type type = new Type();
-            type.init(new com.fasterxml.jackson.databind.ObjectMapper().readTree(typeJson));
+            type.init(com.hitorro.util.json.JsonMappers.json().readTree(typeJson));
             DistributedTable.Partition part = new DistributedTable.Partition(
                     "broadcast", java.util.Set.of("jvssql"), -1L);
             driver.tables().register(new RegisteredWriteTable(
@@ -1042,7 +1042,7 @@ public class QueryWriteController {
         // Preserve first-row column order — that's what most users expect.
         java.util.LinkedHashMap<String, String> types = new java.util.LinkedHashMap<>();
         JsonNode first = rows.get(0);
-        java.util.Iterator<String> it = first.fieldNames();
+        java.util.Iterator<String> it = first.propertyNames().iterator();
         while (it.hasNext()) {
             String fn = it.next();
             String inferred = inferColumnType(fn, rows);
@@ -1133,7 +1133,7 @@ public class QueryWriteController {
      * (.gz/.bz2/.zstd) is delegated to {@code BaseFile.getOutputStream()}.
      */
     private static final class BaseFileNdjsonSink extends JsonNodeSinkBase {
-        private static final ObjectMapper JSON = new ObjectMapper();
+        private static final ObjectMapper JSON = com.hitorro.util.json.JsonMappers.json();
         private final String url;
         private BufferedWriter writer;
         BaseFileNdjsonSink(String url) { this.url = url; }

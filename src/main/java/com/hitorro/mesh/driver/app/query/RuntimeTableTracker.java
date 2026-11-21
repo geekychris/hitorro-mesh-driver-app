@@ -3,8 +3,8 @@
  */
 package com.hitorro.mesh.driver.app.query;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import com.hitorro.mesh.RegisterTableMessage;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -42,7 +42,7 @@ import java.util.Map;
 public class RuntimeTableTracker {
 
     private static final Logger log = LoggerFactory.getLogger(RuntimeTableTracker.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = com.hitorro.util.json.JsonMappers.json();
 
     public record Entry(
             String name,
@@ -154,7 +154,8 @@ public class RuntimeTableTracker {
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             Files.move(tmp, file,
                     StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
+        } catch (IOException | tools.jackson.core.JacksonException e) {   // Jackson 3 errors are unchecked
+            // (on Jackson 2 a serialisation failure was an IOException and was logged here too)
             log.warn("runtime-tables: persist failed: {}", e.toString());
         }
     }

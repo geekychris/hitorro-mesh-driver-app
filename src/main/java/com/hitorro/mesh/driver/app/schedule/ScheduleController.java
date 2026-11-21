@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app.schedule;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.hitorro.mesh.pipelines.runtime.JobStatus;
 import com.hitorro.mesh.pipelines.schedule.Schedule;
 import com.hitorro.mesh.pipelines.schedule.ScheduleTemplate;
@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import com.hitorro.util.json.JsonValues;
 
 /**
  * REST surface for the durable pipeline scheduler.
@@ -154,8 +155,8 @@ public class ScheduleController {
             String trimmed = rawBody.trim();
             if (trimmed.startsWith("{")) {
                 try {
-                    JsonNode node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(trimmed);
-                    v = node.path("checkpoint").asText(null);
+                    JsonNode node = com.hitorro.util.json.JsonMappers.json().readTree(trimmed);
+                    v = JsonValues.asText(node.path("checkpoint"), null);
                 } catch (Exception ignore) { /* fall through to raw */ }
             }
             if (v == null) v = trimmed;

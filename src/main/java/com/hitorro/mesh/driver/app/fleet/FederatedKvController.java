@@ -3,7 +3,7 @@
  */
 package com.hitorro.mesh.driver.app.fleet;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,7 +26,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @RequestMapping("/mesh/retrieval/federated/kv")
 public class FederatedKvController {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = com.hitorro.util.json.JsonMappers.json();
 
     private final FederatedKvService kv;
 
@@ -53,7 +53,7 @@ public class FederatedKvController {
                                                       @RequestParam(name = "prefix", defaultValue = "") String prefix) {
         StreamingResponseBody body = out -> {
             var writer = new java.io.OutputStreamWriter(out, java.nio.charset.StandardCharsets.UTF_8);
-            var mapper = JSON.getFactory().createGenerator(writer);
+            var mapper = JSON.createGenerator(writer);
             for (var it = kv.scanEntries(index, prefix); it.hasNext(); ) {
                 var e = it.next();
                 writer.write("{\"key\":\"");
