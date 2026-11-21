@@ -5,6 +5,12 @@ usage: mesh_golden.py --driver-cp CP --agent-cp CP --out FILE [--jar] [--work DI
 --driver-cp/--agent-cp: either 'classes:deps' classpath (main build) or a fat jar path (with --jar)."""
 import argparse, json, os, re, shutil, socket, subprocess, sys, tempfile, time, urllib.request, urllib.error
 
+def repl(text, k, v):
+    """Masks a run value: the work dir anywhere, a port only as ':<port>' (not inside other numbers)."""
+    if k.isdigit():
+        return re.sub(r'(?<=:)' + k + r'(?!\d)', v, text)
+    return text.replace(k, v)
+
 def free_port():
     s = socket.socket(); s.bind(('127.0.0.1', 0)); p = s.getsockname()[1]; s.close(); return p
 
@@ -182,12 +188,12 @@ def main():
                 st, ct, b = (0, 'file', open(path).read()) if os.path.exists(path) else (0, 'file', '<missing>')
             else:
                 st, ct, b = http(m, base + path, body)
-            for k, v in subst.items(): b = b.replace(k, v)
+            for k, v in subst.items(): b = repl(b, k, v)
             rb = body if isinstance(body, (str, type(None))) else json.dumps(body)
             rq = f"{m} {path}"
             for k, v in subst.items():
-                rq = rq.replace(k, v)
-                if rb is not None: rb = rb.replace(k, v)
+                rq = repl(rq, k, v)
+                if rb is not None: rb = repl(rb, k, v)
             records.append({"i": i, "req": rq, "body": rb, "status": st, "ctype": ct, "resp": b})
         # agent-app endpoints
         for pk, p in agent_ports.items():
