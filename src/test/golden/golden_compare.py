@@ -17,6 +17,15 @@ def norm_text(s, days):
         # keeps the zone style (Z vs +00:00 vs none); not the fraction length: Instant's ISO form
         # drops trailing zero groups (.123456 / .123 / none) depending on the clock
         return '<ISO' + (':' + z if z else '') + '>'
+    # whole-hour/day bucket starts relative to now (histograms over the last N days)
+    import datetime as _dt
+    def bucket(m):
+        try:
+            t = _dt.datetime.strptime(m.group(1), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=_dt.timezone.utc).timestamp()
+        except Exception:
+            return m.group(0)
+        return '<ISOBUCKET>' if abs(t - time.time()) < 40 * 86400 else m.group(0)
+    s = re.sub(r'(\d{4}-\d\d-\d\dT\d\d:00:00)Z', bucket, s)
     s = ISO.sub(iso, s)
     # SQL timestamps (H2 Shell): 2026-11-20 23:59:18.459049+00 / 2026-11-20 23:59:18.45
     s = re.sub(r'(\d{4}-\d\d-\d\d) \d\d:\d\d:\d\d(\.\d+)?(\+\d\d(?::?\d\d)?)?',
